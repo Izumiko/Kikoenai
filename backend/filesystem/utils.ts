@@ -1,21 +1,62 @@
-// @ts-nocheck
-
 import fs from 'fs';
 import crypto from 'crypto';
 import path from 'path';
 // Replacement for recursive-readdir: returns all files recursively as absolute paths
 // Uses sync glob since the walked directories are bounded and the result is needed immediately.
-const recursiveReaddir = (dir) => {
+const recursiveReaddir = (dir: string): string[] => {
   return fs.globSync('**/*', { cwd: dir }).map(f => path.resolve(dir, f));
 };
 import { orderBy } from 'natural-orderby';
 import { joinFragments, encodeTrackId } from '../routes/utils/url.ts';
 import { config } from '../config.ts';
 import { workno } from '../work-id.ts';
+import type { Track, WalkedTrack } from '../types/track.ts';
+import type { RootFolder } from '../types/config.ts';
+import type { SampleImage, ScrapedWorkMetadata } from '../types/scraper.ts';
 
 const supportedMediaExtList = ['.mp3', '.ogg', '.opus', '.wav', '.aac', '.flac', '.webm', '.mp4', '.m4a', '.mka'];
 const supportedSubtitleExtList = ['.lrc', '.srt', '.ass', ".vtt"]; // '.ass' only support show on file list, not for play lyric
 const supportedImageExtList = ['.jpg', '.jpeg', '.png', '.webp'];
+
+/** A work folder found by `getFolderList`. */
+export interface FolderEntry {
+  absolutePath: string;
+  relativePath: string;
+  rootFolderName: string;
+  id: string;
+}
+
+/** One entry of the tree `toTree` returns. */
+interface TreeNode {
+  type: 'folder' | 'text' | 'image' | 'other' | 'audio';
+  title: string;
+  children?: TreeNode[];
+  trackId?: string;
+  relPath?: string;
+  workTitle?: string;
+  mediaStreamUrl?: string;
+  mediaDownloadUrl?: string;
+  trackTitle?: string;
+  duration?: number;
+}
+
+/** One image `collectWorkImages` found on a work page. */
+export interface WorkImage extends SampleImage {
+  /** `smp` for a sample-slider image, `part` for one embedded in the description. */
+  kind: string;
+  thumb: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** The previous probe result for one relPath, as the caller remembered it. */
+export interface KnownProbe {
+  duration?: number;
+  mtime?: number;
+}
+
+/** Anything with an `error` method, e.g. `console` or `LOG.main`. */
+type FolderListLogger = { error(message: string): void };
 
 import LimitPromise from '../lib/limit-promise.ts'; // 限制并发数量
 const limitP = new LimitPromise(config.maxParallelism); // 核心控制器
@@ -23,7 +64,7 @@ import util from 'util';
 import childProcess from 'child_process';
 const execFile = util.promisify(childProcess.execFile);
 
-async function getAudioFileDuration(filePath) {
+async function getAudioFileDuration(filePath: string): Promise<number> {
   try {
     // 默认环境中已经安装了ffprobe命令
     const { stdout } = await execFile('ffprobe', [
@@ -42,7 +83,7 @@ async function getAudioFileDuration(filePath) {
   }
   return NaN;
 }
-const getAudioFileDurationLimited = (filePath) => limitP.call(getAudioFileDuration, filePath);
+const getAudioFileDurationLimited = (filePath: string) => limitP.call(getAudioFileDuration, filePath);
 
 
 const transcodeLimitP = new LimitPromise(config.transcodeMaxConcurrent || 1);
@@ -56,7 +97,7 @@ const transcodeLimitP = new LimitPromise(config.transcodeMaxConcurrent || 1);
  * @param {String} bitrate ffmpeg -b:a value, e.g. '96k'.
  * @returns {String} e.g. '123456_a1b2c3d4e5f6a7b8.opus'
  */
-function transcodeFileName(id, relPath, mtime, bitrate) {
+function transcodeFileName(id: string, relPath: string, mtime: number | string, bitrate: string): string {
   const digest = crypto.createHash('sha256')
     .update(`${relPath}\u0000${mtime}\u0000${bitrate}`)
     .digest('hex')
@@ -72,7 +113,7 @@ function transcodeFileName(id, relPath, mtime, bitrate) {
  * @param {String} cachePath Absolute path to write the final Opus file to.
  * @param {String} bitrate ffmpeg -b:a value, e.g. '96k'.
  */
-async function transcodeToOpus(sourcePath, cachePath, bitrate) {
+async function transcodeToOpus(sourcePath: string, cachePath: string, bitrate: string): Promise<void> {
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   const tmpPath = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
   try {
@@ -91,14 +132,14 @@ async function transcodeToOpus(sourcePath, cachePath, bitrate) {
       fs.unlinkSync(tmpPath);
     } catch (unlinkErr) {
       // ENOENT is fine -- ffmpeg may have failed before ever writing tmpPath
-      if (unlinkErr.code !== 'ENOENT') {
+      if ((unlinkErr as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.error(`failed to clean up transcode tmp file: ${tmpPath}`, unlinkErr);
       }
     }
     throw err;
   }
 }
-const transcodeToOpusLimited = (sourcePath, cachePath, bitrate) => transcodeLimitP.call(transcodeToOpus, sourcePath, cachePath, bitrate);
+const transcodeToOpusLimited = (sourcePath: string, cachePath: string, bitrate: string) => transcodeLimitP.call(transcodeToOpus, sourcePath, cachePath, bitrate);
 
 /**
  * Attach `duration` and `mtime` to the audio tracks in a list, probing only what
@@ -109,7 +150,7 @@ const transcodeToOpusLimited = (sourcePath, cachePath, bitrate) => transcodeLimi
  * @param {Map<String, {duration, mtime}>} known previously recorded, by relPath
  * @returns {Promise<Array>} the same tracks
  */
-async function probeAudioDurations (work_id, tracks, known = new Map()) {
+async function probeAudioDurations (work_id: string, tracks: WalkedTrack[], known: Map<string, KnownProbe> = new Map()): Promise<WalkedTrack[]> {
   await Promise.all(tracks.map(async (track) => {
     if (!supportedMediaExtList.includes(track.ext)) return;
 
@@ -149,7 +190,7 @@ async function probeAudioDurations (work_id, tracks, known = new Map()) {
  * @param {String} dir Work directory (absolute).
  * @param {Array} files Optional list of files to process.
  */
-const getTrackList = async function (id, dir, files) {
+const getTrackList = async function (id: string, dir: string, files?: string[]): Promise<WalkedTrack[]> {
   try {
     const walkedFiles = files || (await recursiveReaddir(dir));
     // Filter out any files not matching these extensions
@@ -205,8 +246,8 @@ const getTrackList = async function (id, dir, files) {
  * @param {Array} tracks 
  * @param {String} workTitle 
  */
-const toTree = (tracks, workTitle, workDir, rootFolder) => {
-  const tree = [];
+const toTree = (tracks: Track[], workTitle: string, workDir: string, rootFolder: RootFolder): TreeNode[] => {
+  const tree: TreeNode[] = [];
 
   // 插入文件夹
   tracks.forEach(track => {
@@ -223,7 +264,7 @@ const toTree = (tracks, workTitle, workDir, rootFolder) => {
           children: []
         });
       }
-      fatherFolder = fatherFolder.find(item => item.type === 'folder' && item.title === folderName).children;
+      fatherFolder = fatherFolder.find(item => item.type === 'folder' && item.title === folderName)!.children!;
     });
   });
 
@@ -232,7 +273,7 @@ const toTree = (tracks, workTitle, workDir, rootFolder) => {
     let fatherFolder = tree;
     const pathParts = track.subtitle ? track.subtitle.split('/') : [];
     pathParts.forEach(folderName => {
-      fatherFolder = fatherFolder.find(item => item.type === 'folder' && item.title === folderName).children;
+      fatherFolder = fatherFolder.find(item => item.type === 'folder' && item.title === folderName)!.children!;
     });
 
     // Path controlled by config.offloadMedia, config.offloadStreamPath and config.offloadDownloadPath
@@ -318,7 +359,7 @@ const toTree = (tracks, workTitle, workDir, rootFolder) => {
  * 音声文件夹对象 { relativePath: '相对路径', rootFolderName: '根文件夹别名', id: '音声ID' }
  * @param {Object} rootFolder 根文件夹对象 { name: '别名', path: '绝对路径' }
  */
-async function* getFolderList(rootFolder, current = '', depth = 0, logger = console ) { // 异步生成器函数 async function*() {}
+async function* getFolderList(rootFolder: RootFolder, current = '', depth = 0, logger: FolderListLogger = console): AsyncGenerator<FolderEntry, void, undefined> { // 异步生成器函数 async function*() {}
   // 浅层遍历
   const folders = await fs.promises.readdir(path.join(rootFolder.path, current));    
 
@@ -355,9 +396,10 @@ async function* getFolderList(rootFolder, current = '', depth = 0, logger = cons
           }
         }
     } catch (err) {
-      if (err.code === 'EPERM') {
-        if (err.path && !err.path.endsWith('System Volume Information')) {
-          logger.error(` ! 无法访问 ${err.path}`);
+      const error = err as NodeJS.ErrnoException;
+      if (error.code === 'EPERM') {
+        if (error.path && !error.path.endsWith('System Volume Information')) {
+          logger.error(` ! 无法访问 ${error.path}`);
         }
       } else {
         throw err;
@@ -373,7 +415,7 @@ async function* getFolderList(rootFolder, current = '', depth = 0, logger = cons
  * @returns {String} Filename like 'RJ123456_img_main.jpg' or 'd_215444_img_main.jpg'
  *          (on-disk names keep Fanza's own underscore form — see work-id.js)
  */
-function coverFileName(id, type) {
+function coverFileName(id: string, type: string): string {
   return `${workno(id)}_img_${type}.jpg`;
 }
 
@@ -381,14 +423,14 @@ function coverFileName(id, type) {
  * Deletes a work's cover image from disk.
  * @param {String} id Work id (e.g. '123456', '01134567', 'd215444').
  */
-const deleteCoverImageFromDisk = id => new Promise((resolve, reject) => {
+const deleteCoverImageFromDisk = (id: string): Promise<void> => new Promise<void>((resolve, reject) => {
   const types = ['main', 'sam', '240x240', '360x360'];
   types.forEach(type => {
     try {
       fs.unlinkSync(path.join(config.coverFolderDir, coverFileName(id, type)));
     } catch (err) {
       // ENOENT is fine — file may not exist
-      if (err.code !== 'ENOENT') {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         reject(err);
       }
     }
@@ -403,7 +445,7 @@ const deleteCoverImageFromDisk = id => new Promise((resolve, reject) => {
  * @param {String} id Work id (e.g. '123456', '01134567', 'd215444').
  * @param {String} type img type: ('main', 'sam', 'sam@2x', 'sam@3x', '240x240', '360x360').
  */
-const saveCoverImageToDisk = (stream, id, type) => new Promise((resolve, reject) => {
+const saveCoverImageToDisk = (stream: NodeJS.ReadableStream, id: string, type: string): Promise<void> => new Promise<void>((resolve, reject) => {
   // TODO: don't assume image is a jpg?
   try {
     stream.pipe(
@@ -420,11 +462,11 @@ const saveCoverImageToDisk = (stream, id, type) => new Promise((resolve, reject)
  * @param {Object} metadata Scraped work metadata.
  * @returns {Array<Object>} [{ kind, url, thumb, width, height }]
  */
-function collectWorkImages(metadata) {
-  const images = [];
-  const seen = new Set();
+function collectWorkImages(metadata: Pick<ScrapedWorkMetadata, 'sampleImages' | 'descriptionParts'>): WorkImage[] {
+  const images: WorkImage[] = [];
+  const seen = new Set<string>();
 
-  const push = (kind, image) => {
+  const push = (kind: string, image: SampleImage): void => {
     if (!image || !image.url || seen.has(image.url)) return;
     seen.add(image.url);
     images.push({
@@ -457,7 +499,7 @@ function collectWorkImages(metadata) {
  * @param {String} [ext='jpg'] File extension, without the dot
  * @returns {String} Filename like 'RJ123456_img_smp1.jpg'
  */
-function workImageFileName(id, kind, index, ext = 'jpg') {
+function workImageFileName(id: string, kind: string, index: number, ext: string = 'jpg'): string {
   const safeExt = /^[a-z0-9]{1,5}$/i.test(ext) ? ext.toLowerCase() : 'jpg';
   const prefix = workno(id);
   return `${prefix}_img_${kind}${index}.${safeExt}`;
@@ -469,7 +511,7 @@ function workImageFileName(id, kind, index, ext = 'jpg') {
  * @param {String} id Work id (e.g. '123456', '01134567', 'd215444').
  * @returns {RegExp}
  */
-function workImageFileNamePattern(id) {
+function workImageFileNamePattern(id: string): RegExp {
   const prefix = workno(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`^${prefix}_img_(smp|part)\\d+\\.[a-z0-9]+$`, 'i');
 }
@@ -479,7 +521,7 @@ function workImageFileNamePattern(id) {
  * @param {ReadableStream} stream Image data stream.
  * @param {String} fileName Output name, from workImageFileName.
  */
-const saveWorkImageToDisk = (stream, fileName) => new Promise((resolve, reject) => {
+const saveWorkImageToDisk = (stream: NodeJS.ReadableStream, fileName: string): Promise<void> => new Promise<void>((resolve, reject) => {
   try {
     stream.pipe(
       fs.createWriteStream(path.join(config.imageFolderDir, fileName))
@@ -498,14 +540,14 @@ const saveWorkImageToDisk = (stream, fileName) => new Promise((resolve, reject) 
  * @param {Set<String>} [keep] File names to spare, for pruning after a download.
  * @returns {Promise<Number>} How many files were deleted.
  */
-const deleteWorkImagesFromDisk = async (id, keep) => {
+const deleteWorkImagesFromDisk = async (id: string, keep?: Set<string>): Promise<number> => {
   const pattern = workImageFileNamePattern(id);
 
   let entries;
   try {
     entries = await fs.promises.readdir(config.imageFolderDir);
   } catch (err) {
-    if (err.code === 'ENOENT') return 0; // no image folder yet, nothing to delete
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0; // no image folder yet, nothing to delete
     throw err;
   }
 
@@ -515,7 +557,7 @@ const deleteWorkImagesFromDisk = async (id, keep) => {
     try {
       await fs.promises.unlink(path.join(config.imageFolderDir, name));
     } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
   }));
 
@@ -527,9 +569,9 @@ const deleteWorkImagesFromDisk = async (id, keep) => {
  * @param {number|string} id
  * @return {string}
  */
-function formatID(id) {
+function formatID(id: number | string): string {
   if (typeof id === 'string') return id; // already in final form ('123456', '01134567', 'd215444')
-  const n = parseInt(id, 10);
+  const n = parseInt(String(id), 10);
   return (n >= 1000000) ? `0${n}`.slice(-8) : `000000${n}`.slice(-6);
 }
 

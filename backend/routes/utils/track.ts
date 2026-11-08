@@ -12,16 +12,6 @@ import { supportedSubtitleExtList } from '../../filesystem/utils.ts';
 // because a text/plain ASR answer is saved as one (asr.js).
 const OVERLAY_EXT: string[] = [...supportedSubtitleExtList, '.txt'];
 
-// filesystem/workFiles.ts is still untyped, so its parameters and return type
-// are whatever the compiler inferred from the body. This is the signature the
-// media routes rely on: the options object it accepts and the shaped listing it
-// returns (the same shape getTrackList produces).
-const listTracks = listWorkTracks as (
-  workId: string,
-  workDir: string,
-  options?: { indexedAt?: string | null },
-) => Promise<Track[]>;
-
 /** The t_work columns a media request needs to find the work's listing. */
 interface TrackWork {
   root_folder: string;
@@ -87,7 +77,7 @@ const resolveTrack = async (req: Request, res: Response): Promise<ResolvedTrack 
   }
 
   const workDir = path.join(rootFolder.path, work.dir);
-  const tracks = await listTracks(workId, workDir, { indexedAt: work.files_indexed_at });
+  const tracks = await listWorkTracks(workId, workDir, { indexedAt: work.files_indexed_at });
 
   // Express 5 hands a `*path` back as an array of already-decoded segments.
   const segments: string[] = ([] as string[]).concat(req.params.path || []);

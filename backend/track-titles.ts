@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Pulling a work's track list out of its scraped DLsite description.
  *
@@ -22,6 +21,45 @@
 
 import * as cheerio from 'cheerio';
 import { fetch as undiciFetch, Agent } from 'undici';
+import type { DescriptionPart } from './types/scraper.ts';
+
+/** The response type of the model call, taken from undici itself. */
+type ModelResponse = Awaited<ReturnType<typeof undiciFetch>>;
+
+/** What `llmConfig` reads out of the environment. */
+interface LlmConfig {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  /** Provider-specific knobs merged into the request body, verbatim. */
+  extraBody: Record<string, unknown>;
+  timeoutMs: number;
+}
+
+/**
+ * A parsed model answer. Only the two shapes the two prompts ask for are ever
+ * read, and both are validated entry by entry afterwards.
+ */
+export interface ModelAnswer {
+  tracks?: unknown;
+  titles?: unknown;
+}
+
+/** One answer assembled out of the SSE stream. */
+interface StreamResult {
+  /** Empty when the model returned nothing. */
+  content: string;
+  /** Prompt-evaluation time in ms; null if no token ever arrived. */
+  firstTokenMs: number | null;
+}
+
+/** Options of `callModel`. */
+interface CallModelOptions {
+  /** Dump the whole exchange to stdout; the CLI wants that, a server route does not. */
+  verbose?: boolean;
+  /** Ask for the CLI's per-file mapping prompt instead of the dialog's list prompt. */
+  mapping?: boolean;
+}
 
 /**
  * The HTTP client for the model call, with both of undici's own timeouts off.
@@ -60,7 +98,7 @@ const UNINFORMATIVE = /^(?:track|trk|tr|no|#|＃)?[\s._\-–—]*[0-9０-９]{1,
 //   OpenRouter:             {"reasoning":{"exclude":true}}
 // Context length is set on the server for every one of these except Ollama,
 // which takes it per request as {"options":{"num_ctx":16384}}.
-const llmConfig = () => ({
+const llmConfig = (): LlmConfig => ({
   baseUrl: process.env.KIKO_LLM_BASE_URL,
   apiKey: process.env.KIKO_LLM_API_KEY,
   model: process.env.KIKO_LLM_MODEL,
@@ -69,12 +107,12 @@ const llmConfig = () => ({
   // work, especially with reasoning still switched on. Behind the HTTP route
   // this is also what the browser waits on, so a reverse proxy with a shorter
   // read timeout will give up first.
-  timeoutMs: parseInt(process.env.KIKO_LLM_TIMEOUT_MS, 10) || 600000,
+  timeoutMs: parseInt(process.env.KIKO_LLM_TIMEOUT_MS ?? '', 10) || 600000,
 });
 
-const isLlmConfigured = () => Boolean(process.env.KIKO_LLM_BASE_URL && process.env.KIKO_LLM_MODEL);
+const isLlmConfigured = (): boolean => Boolean(process.env.KIKO_LLM_BASE_URL && process.env.KIKO_LLM_MODEL);
 
-const isUninformative = (fileName) => {
+const isUninformative = (fileName: string): boolean => {
   const stem = fileName.replace(/\.[^.]+$/, '').trim();
   return UNINFORMATIVE.test(stem);
 };
@@ -92,7 +130,7 @@ const isUninformative = (fileName) => {
  * @param {String} title
  * @returns {String}
  */
-const cleanTitle = title => String(title)
+const cleanTitle = (title: string): string => String(title)
   .replace(/[\r\n\t]+/g, ' ')
   .replace(/ {2,}/g, ' ')
   .trim();
@@ -122,7 +160,7 @@ const cleanTitle = title => String(title)
  * @param {String} html
  * @returns {String}
  */
-function htmlToText(html) {
+function htmlToText(html: string | null | undefined): string {
   if (!html) return '';
   const $ = cheerio.load(String(html).replace(/\ue000/g, ''), null, false);
   $('br').replaceWith('\ue000');
@@ -140,8 +178,8 @@ function htmlToText(html) {
  * type_tracklist block. About one work in six has these, and for those no model
  * is needed at all.
  */
-function structuredTitles(descriptionParts) {
-  const out = [];
+function structuredTitles(descriptionParts: DescriptionPart[] | null | undefined): string[] {
+  const out: string[] = [];
   for (const part of descriptionParts || []) {
     for (const track of (part.tracks || [])) {
       if (track && track.title && track.title.trim()) out.push(cleanTitle(track.title));
@@ -167,7 +205,7 @@ function structuredTitles(descriptionParts) {
  * @param {Array} audio tracks, already filtered to AUDIO_EXT
  * @returns {Array<String>} distinct file names, disk order preserved
  */
-const distinctTrackNames = (audio) => [...new Set(audio.map(t => t.title))];
+const distinctTrackNames = (audio: Array<{ title: string }>): string[] => [...new Set(audio.map(t => t.title))];
 
 /**
  * Text a title must appear in to count as "copied, not invented".
@@ -175,7 +213,7 @@ const distinctTrackNames = (audio) => [...new Set(audio.map(t => t.title))];
  * Includes the structured track titles as well as the prose, so a work whose
  * list DLsite published structurally is not rejected wholesale.
  */
-function buildHaystack(description, descriptionParts) {
+function buildHaystack(description: string | null | undefined, descriptionParts: DescriptionPart[] | null | undefined): string {
   return [description || '', ...structuredTitles(descriptionParts)]
     .join('\n')
     .replace(/\s+/g, '');
@@ -233,7 +271,7 @@ Respond with JSON only, no prose:
  * The text handed to the model: the prose description, plus any structured
  * track titles, which live outside `description` (see buildHaystack).
  */
-function buildPrompt(description, structured) {
+function buildPrompt(description: string | null | undefined, structured: string[]): string {
   if (!structured.length) return description || '';
   return `${description || ''}\n\n# Track list\n${structured.join('\n')}`;
 }
@@ -256,15 +294,15 @@ function buildPrompt(description, structured) {
  * @returns {Promise<{content: String, firstTokenMs: Number|null}>}
  *   `firstTokenMs` is prompt-evaluation time -- null if nothing ever arrived.
  */
-async function readModelStream(res) {
+async function readModelStream(res: ModelResponse): Promise<StreamResult> {
   const decoder = new TextDecoder();
   const started = Date.now();
-  let firstTokenMs = null;
+  let firstTokenMs: number | null = null;
   let buffer = '';
   let raw = '';
   let content = '';
 
-  for await (const chunk of res.body) {
+  for await (const chunk of res.body!) {
     const text = decoder.decode(chunk, { stream: true });
     raw += text;
     buffer += text;
@@ -312,7 +350,11 @@ async function readModelStream(res) {
  * @param {Object} options `verbose` dumps the whole exchange to stdout -- the
  *   CLI wants that, a server route does not.
  */
-async function callModel(description, fileNames, { verbose = false, mapping = true } = {}) {
+async function callModel(
+  description: string,
+  fileNames: string[],
+  { verbose = false, mapping = true }: CallModelOptions = {},
+): Promise<ModelAnswer> {
   const { baseUrl, apiKey, model, extraBody, timeoutMs } = llmConfig();
 
   const body = {
@@ -343,10 +385,12 @@ async function callModel(description, fileNames, { verbose = false, mapping = tr
     stream: true,
   };
 
-  const headers = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  // Callers check isLlmConfigured() first; the assertion only says the call
+  // already assumes a base URL is present.
+  const url = `${baseUrl!.replace(/\/$/, '')}/chat/completions`;
 
   // Everything on the wire, untruncated. This is a one-work debugging tool and
   // guessing at what the model saw is the slowest way to work out why an
@@ -379,7 +423,8 @@ async function callModel(description, fileNames, { verbose = false, mapping = tr
       dispatcher: llmAgent,
     });
   } catch (err) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+    const error = err as Error & { cause?: { code?: string; name?: string; message?: string } };
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
       throw new Error(
         `LLM did not answer within ${Math.round(timeoutMs / 1000)}s. `
         + 'Raise KIKO_LLM_TIMEOUT_MS (milliseconds), switch off reasoning via '
@@ -390,7 +435,7 @@ async function callModel(description, fileNames, { verbose = false, mapping = tr
     // `fetch` reports every transport failure as the same opaque
     // "TypeError: fetch failed"; the real reason is only ever on `cause`, so
     // rethrowing as-is leaves nothing to diagnose from.
-    const cause = err.cause;
+    const cause = error.cause;
 
     // Should be unreachable now that llmAgent disables both of undici's
     // timers, but a stale dispatcher or a future default would bring it back,
@@ -477,7 +522,7 @@ async function callModel(description, fileNames, { verbose = false, mapping = tr
 // still a copy of the title, just not of the numbering.
 const TRACK_MARKER = /^(?:track|trk|tr|no\.?|#|\uff03)?[\s.\u3001\uff0e:\uff1a_\-\u2013\u2014]*(?:[0-9\uff10-\uff19]{1,3}|[\u2460-\u2473\u2776-\u277f\u25c6\u25c7\u25a0\u25a1\u25cf\u25cb\u2605\u2606\u30fb])[\s.\u3001\uff0e:\uff1a_\-\u2013\u2014]*/i;
 
-const squash = (text) => text.replace(/\s+/g, '');
+const squash = (text: string): string => text.replace(/\s+/g, '');
 
 /**
  * Did the model copy this out of the description, rather than invent it?
@@ -488,7 +533,7 @@ const squash = (text) => text.replace(/\s+/g, '');
  * good answers from exactly the local models this feature is for. A stripped
  * title has to keep some substance, or a bare "01." would match anything.
  */
-function isVerbatim(title, haystack) {
+function isVerbatim(title: string, haystack: string): boolean {
   if (haystack.includes(squash(title))) return true;
   const body = title.replace(TRACK_MARKER, '').trim();
   return squash(body).length >= 2 && haystack.includes(squash(body));
@@ -504,12 +549,12 @@ function isVerbatim(title, haystack) {
  *
  * The UI path does not use this -- see collectTitles.
  */
-function validate(parsed, haystack, fileNames) {
+function validate(parsed: ModelAnswer, haystack: string, fileNames: string[]): { accepted: Record<string, string>; rejected: Array<[string, string, string]> } {
   const bySet = new Set(fileNames);
-  const accepted = {};
-  const rejected = [];
+  const accepted: Record<string, string> = {};
+  const rejected: Array<[string, string, string]> = [];
 
-  for (const row of (parsed.tracks || [])) {
+  for (const row of (parsed.tracks || []) as Array<{ file?: unknown; title?: unknown }>) {
     if (!row || typeof row.file !== 'string' || typeof row.title !== 'string') continue;
     const title = cleanTitle(row.title);
     if (!title) continue;
@@ -548,15 +593,15 @@ function validate(parsed, haystack, fileNames) {
  *
  * @returns {{titles: String[], unverified: Number}}
  */
-function collectTitles(parsed, haystack) {
+function collectTitles(parsed: ModelAnswer, haystack: string): { titles: string[]; unverified: number } {
   // SYSTEM_PROMPT_LIST asks for a bare array. A model that answers in the
   // mapping shape anyway is still readable, which matters because small local
   // models drift toward whatever schema they saw most.
-  const raw = Array.isArray(parsed.titles)
+  const raw: unknown[] = Array.isArray(parsed.titles)
     ? parsed.titles
-    : (parsed.tracks || []).map(row => row && row.title);
+    : ((parsed.tracks || []) as Array<{ title?: unknown }>).map(row => row && row.title);
 
-  const titles = [];
+  const titles: string[] = [];
   let unverified = 0;
 
   for (const entry of raw) {

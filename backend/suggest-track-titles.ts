@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Read a work's track list out of its scraped description.
  *
@@ -33,10 +32,20 @@ import { AUDIO_EXT, isLlmConfigured, htmlToText, structuredTitles, distinctTrack
  * apart so it can decide what to log.
  */
 class SuggestError extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = 'SuggestError';
   }
+}
+
+/** One proposal for a work's track titles. */
+export interface SuggestedTitles {
+  /** Ordered list, not a per-file mapping -- placement is the caller's job. */
+  titles: string[];
+  trackCount: number;
+  source: 'structured' | 'llm';
+  /** How many titles were not found in the description (reworded or invented). */
+  unverified: number;
 }
 
 /**
@@ -50,7 +59,7 @@ class SuggestError extends Error {
  *   description -- reworded or invented -- which the caller should warn about
  *   rather than hide.
  */
-async function suggestTrackTitles(rawWorkId) {
+async function suggestTrackTitles(rawWorkId: unknown): Promise<SuggestedTitles> {
   if (typeof rawWorkId !== 'string' || !WORK_ID_RE.test(rawWorkId)) {
     throw new SuggestError(`"${rawWorkId}" is not a valid work id.`);
   }

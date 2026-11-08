@@ -1,14 +1,20 @@
-// @ts-nocheck
-
 import { parseArgs } from 'util';
 
 import pjson from '../package.json' with { type: 'json' };
 import { performUpdate } from './scannerModules.ts';
+import type { UpdateMetadataOptions } from './scannerModules.ts';
+
+/** One flag: its long name, the alias this script has always accepted, and its help text. */
+interface OptionDefinition {
+  name: string;
+  alias: string;
+  description: string;
+}
 
 // One entry per flag: the long name used by the code below, the alias this
 // script has always accepted, and the help text. Node's parseArgs has no alias
 // support, so the alias is registered as its own boolean option.
-const optionDefinitions = [
+const optionDefinitions: OptionDefinition[] = [
   { name: 'refreshAll', alias: 'all', description: 'Refresh both dynamic and static metadata' },
   { name: 'includeNSFW', alias: 'nsfw', description: 'Refresh dynamic metadata and nsfw field' },
   { name: 'includeTags', alias: 'tags', description: 'Refresh dynamic metadata and tags' },
@@ -22,7 +28,7 @@ const optionDefinitions = [
   { name: 'includeReviews', alias: 'reviews', description: 'Re-scrape every DLsite user review (paginated, one request per 50)' },
 ];
 
-const optionConfig = {
+const optionConfig: Record<string, { type: 'boolean' }> = {
   help: { type: 'boolean' },
   version: { type: 'boolean' },
 };
@@ -40,7 +46,7 @@ const USAGE = [
   ...optionDefinitions.map(({ name, alias, description }) => `  --${name}, --${alias}  ${description}`),
 ].join('\n');
 
-let values;
+let values: ReturnType<typeof parseArgs>['values'];
 try {
   ({ values } = parseArgs({
     args: process.argv.slice(2),
@@ -48,7 +54,7 @@ try {
     strict: true,
   }));
 } catch (err) {
-  console.error(`updater: ${err.message}`);
+  console.error(`updater: ${(err as Error).message}`);
   console.error(USAGE);
   process.exit(1);
 }
@@ -63,9 +69,9 @@ if (values.version) {
   process.exit(0);
 }
 
-const flag = (name) => values[name] === true;
+const flag = (name: string): boolean => values[name] === true;
 
-const updateOptions = {};
+const updateOptions: UpdateMetadataOptions = {};
 
 if (flag('refreshAll') || flag('all')) {
   updateOptions.refreshAll = true;
@@ -97,6 +103,6 @@ performUpdate(updateOptions)
   .then(() => {
     process.exit(0);
   })
-  .catch(err => {
+  .catch((err: unknown) => {
     throw err;
   });

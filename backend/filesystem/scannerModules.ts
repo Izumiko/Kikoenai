@@ -1,7 +1,6 @@
-// @ts-nocheck
-
 import fs from 'fs';
 import path from 'path';
+import type { Knex } from 'knex';
 import LimitPromise from '../lib/limit-promise.ts'; // 限制并发数量
 
 import axios from '../scraper/axios.ts'; // 数据请求
@@ -20,11 +19,88 @@ import { nameToUUID } from '../scraper/utils.ts';
 
 import { config } from '../config.ts';
 import { updateLock } from '../upgrade.ts';
+import type { FolderEntry } from './utils.ts';
+import type { AsmrOneCoverUrls, CoverUrls, WorkMetadata } from '../types/scraper.ts';
+import type { ScanCommand, ScanEvent, ScanInitState, ScanLogEntry, ScanLogLevel, ScanResultEntry, ScanTask, ScanTaskResult } from '../types/scan-events.ts';
 
-process.send = process.send || function (message, callback) {
-  if (typeof callback === 'function') callback();
+/** What `processFolder` reports for one work folder. */
+type FolderResult = 'added' | 'failed' | 'skipped';
+
+/** What `refreshWorks` reports for one work. */
+type RefreshResult = 'updated' | 'failed';
+
+/** A scrape as the scanner writes it: the work's location added, plus the ASMR.one cover URLs. */
+type ScannerWorkMetadata = WorkMetadata & AsmrOneCoverUrls;
+
+/**
+ * A scrape with the location added, as `insertWorkMetadata` requires it. The
+ * two fields are assigned just before each insert; the assertion at the call
+ * site is only needed because TypeScript narrows property accesses, not the
+ * object that carries them.
+ */
+type InsertableWorkMetadata = WorkMetadata & Required<Pick<WorkMetadata, 'rootFolderName' | 'dir'>>;
+
+/** The counters `performScan` reports. */
+interface ScanCounts {
+  added: number;
+  failed: number;
+  skipped: number;
+  updated: number;
+}
+
+/** The counters `refreshWorks` reports. */
+interface RefreshCounts {
+  updated: number;
+  failed: number;
+}
+
+/** The `t_work` columns a work-file scan needs. */
+interface WorkFileScanRow {
+  id: string;
+  root_folder: string;
+  dir: string;
+}
+
+/**
+ * The flags `updateMetadata` accepts. `updater.ts` builds this object from its
+ * command-line flags, and the flags select which scraper runs.
+ */
+export interface UpdateMetadataOptions {
+  refreshAll?: boolean;
+  includeNSFW?: boolean;
+  includeTags?: boolean;
+  includeVA?: boolean;
+  includeIllustrator?: boolean;
+  includeScriptWriter?: boolean;
+  includeSeries?: boolean;
+  includeAuthor?: boolean;
+  includeDescription?: boolean;
+  includeImages?: boolean;
+  includeReviews?: boolean;
+}
+
+/** A callback `process.send` calls once the message left the process. */
+type SendCallback = (error: Error | null) => void;
+
+/**
+ * Send one event to the parent over the fork IPC channel.
+ *
+ * `process.send` is read at call time rather than captured: the scanner scripts
+ * always run forked, but this module is also imported directly (tests, and
+ * `npm run scan`), and tests replace `process.send` to capture what is emitted.
+ */
+const send = (message: ScanEvent, callback?: SendCallback): void => {
+  if (callback) process.send!(message, callback);
+  else process.send!(message);
+};
+
+/** Stand-in used when this module is not running in a forked child. */
+const fallbackSend = (message: ScanEvent, callback?: SendCallback): boolean => {
+  if (typeof callback === 'function') callback(null);
   return true;
 };
+
+process.send = process.send ?? (fallbackSend as NonNullable<typeof process.send>);
 
 // uncapped record goes to the log file instead.
 const MAX_MAIN_LOGS = 500;
@@ -32,78 +108,78 @@ const MAX_TASK_LOGS = 200;
 const MAX_FAILED_TASKS = 200;
 const MAX_RESULTS = 500;
 
-const tasks = [];
-const failedTasks = [];
-const mainLogs = [];
-const results = [];
+const tasks: ScanTask[] = [];
+const failedTasks: ScanTask[] = [];
+const mainLogs: ScanLogEntry[] = [];
+const results: ScanResultEntry[] = [];
 
-const push = (array, entry, max) => {
+const push = <T>(array: T[], entry: T, max: number): void => {
   array.push(entry);
   if (array.length > max) array.splice(0, array.length - max);
 };
 
 const LOG = {
-  finish(message) {
+  finish(message: string): Promise<void> {
     console.log(` * ${message}`);
     scanLog.write('info', message);
-    return new Promise((resolve) => {
-      process.send({ event: 'SCAN_FINISHED', payload: { message } }, resolve);
+    return new Promise<void>((resolve) => {
+      send({ event: 'SCAN_FINISHED', payload: { message } }, () => resolve());
     });
   },
 
   // Names the log file in the run's first line, so the page tells the user
   // where the untruncated version lives.
-  open(runName) {
+  open(runName: string): void {
     const filePath = scanLog.open(runName);
     if (filePath) this.main.info(`日志文件: ${filePath}`);
   },
 
   main: {
-    __internal__(level, message) {
+    __internal__(level: ScanLogLevel, message: string): void {
       console[level]("main log", message);
       scanLog.write(level, message);
 
-      const entry = { level, message };
+      const entry: ScanLogEntry = { level, message };
       push(mainLogs, entry, MAX_MAIN_LOGS);
-      process.send({ event: 'SCAN_MAIN_LOG', payload: { entry } });
+      send({ event: 'SCAN_MAIN_LOG', payload: { entry } });
     },
-    log(msg) { // default log at level info
+    log(msg: string): void { // default log at level info
       this.__internal__("info", msg);
     },
-    debug(msg) {
+    debug(msg: string): void {
       this.__internal__("debug", msg);
     },
-    info(msg) {
+    info(msg: string): void {
       this.__internal__("info", msg);
     },
-    error(msg) {
+    error(msg: string): void {
       this.__internal__("error", msg);
     },
-    warn(msg) {
+    warn(msg: string): void {
       this.__internal__("warn", msg);
     }
   },
   result: {
-    add(rjcode, result, count) {
-      const entry = { rjcode, result, count };
+    add(rjcode: string, result: ScanTaskResult, count: number): void {
+      const entry: ScanResultEntry = { rjcode, result, count };
       push(results, entry, MAX_RESULTS);
-      process.send({ event: 'SCAN_RESULT', payload: { result: entry } });
+      send({ event: 'SCAN_RESULT', payload: { result: entry } });
     }
   },
   task: {
     // 添加作品专门的log记录
-    add(taskId) { // taskId == rjcode or cid, e.g. "443322" or "01134321" or "d215444"
+    add(taskId: string): void { // taskId == rjcode or cid, e.g. "443322" or "01134321" or "d215444"
       console.assert(typeof(taskId) === "string" && (taskId.length === 6 || taskId.length === 8 || isFanzaId(taskId) || isBooksId(taskId)));
       tasks.push({
         rjcode: taskId,
         result: null,
         logs: []
       });
-      process.send({ event: 'SCAN_TASK_ADD', payload: { rjcode: taskId } });
+      send({ event: 'SCAN_TASK_ADD', payload: { rjcode: taskId } });
     },
 
     // 移除作品的专属log，如果该作品的对应任务失败，则发送相应的失败消息
-    remove(taskId, result) {
+    remove(taskId: string, result: ScanTaskResult): void {
       const index = tasks.findIndex(task => task.rjcode === taskId);
       if (index == -1) {
         // 当前任务并没有被添加，则跳过remove操作
@@ -113,54 +189,55 @@ const LOG = {
       const removedTask = tasks[index];
       removedTask.result = result;
       tasks.splice(index, 1);
-      process.send({ event: 'SCAN_TASK_REMOVE', payload: { rjcode: taskId, result } });
+      send({ event: 'SCAN_TASK_REMOVE', payload: { rjcode: taskId, result } });
 
       if (removedTask.result === 'failed') {
         push(failedTasks, removedTask, MAX_FAILED_TASKS);
-        process.send({ event: 'SCAN_FAILED_TASK', payload: { task: removedTask } });
+        send({ event: 'SCAN_FAILED_TASK', payload: { task: removedTask } });
       }
     },
-    __internal_task__(taskId, level, msg) {
+    __internal_task__(taskId: string, level: ScanLogLevel, msg: string): void {
       console.assert(typeof(taskId) === "string" && (taskId.length === 6 || taskId.length === 8 || isFanzaId(taskId) || isBooksId(taskId)));
       console[level](`task[${workno(taskId)}] log`, msg);
       scanLog.write(level, msg, workno(taskId));
 
       const task = tasks.find(task => task.rjcode === taskId);
       if (task) {
-        const entry = { level, message: msg };
+        const entry: ScanLogEntry = { level, message: msg };
         push(task.logs, entry, MAX_TASK_LOGS);
-        process.send({ event: 'SCAN_TASK_LOG', payload: { rjcode: taskId, entry } });
+        send({ event: 'SCAN_TASK_LOG', payload: { rjcode: taskId, entry } });
       }
     },
-    log(taskId, msg) { // default log at level info
+    log(taskId: string, msg: string): void { // default log at level info
       this.__internal_task__(taskId, "info", msg);
     },
-    debug(taskId, msg) {
+    debug(taskId: string, msg: string): void {
       this.__internal_task__(taskId, "debug", msg);
     },
-    info(taskId, msg) {
+    info(taskId: string, msg: string): void {
       this.__internal_task__(taskId, "info", msg);
     },
-    error(taskId, msg) {
+    error(taskId: string, msg: string): void {
       this.__internal_task__(taskId, "error", msg);
     },
-    warn(taskId, msg) {
+    warn(taskId: string, msg: string): void {
       this.__internal_task__(taskId, "warn", msg);
     }
 
   },
 };
 
-process.on('message', (m) => {
+process.on('message', (m: ScanCommand) => {
   if (m.emit === 'SCAN_INIT_STATE') {
-    process.send({
+    const payload: ScanInitState = {
+      tasks,
+      failedTasks,
+      mainLogs,
+      results
+    };
+    send({
       event: 'SCAN_INIT_STATE',
-      payload: {
-        tasks,
-        failedTasks,
-        mainLogs,
-        results
-      }
+      payload
     });
   } else if (m.exit) {
     LOG.main.error(' ! 终止扫描进程.');
@@ -173,16 +250,16 @@ process.on('disconnect', () => process.exit(1));
 
 // One folder per work id, keeping the last copy found, so no two folders race to
 // insert the same work. duplicateSet maps each duplicated id to the other copies.
-function uniqueFolderListSeparate (folders) {
-  const byId = new Map();
+function uniqueFolderListSeparate (folders: FolderEntry[]): { uniqueList: FolderEntry[]; duplicateSet: Record<string, FolderEntry[]> } {
+  const byId = new Map<string, FolderEntry[]>();
   for (const folder of folders) {
     const copies = byId.get(folder.id);
     if (copies) copies.push(folder);
     else byId.set(folder.id, [folder]);
   }
 
-  const uniqueList = [];
-  const duplicateSet = {};
+  const uniqueList: FolderEntry[] = [];
+  const duplicateSet: Record<string, FolderEntry[]> = {};
   for (const [id, copies] of byId) {
     uniqueList.push(copies[copies.length - 1]);
     if (copies.length > 1) duplicateSet[id] = copies.slice(0, -1);
@@ -198,17 +275,17 @@ function uniqueFolderListSeparate (folders) {
  * @param {string} rootFolderName 根文件夹别名
  * @param {string} dir 音声文件夹相对路径
  */
-async function getMetadata(id, rootFolderName, dir) {
+async function getMetadata(id: string, rootFolderName: string, dir: string): Promise<ScannerWorkMetadata | 'failed'> {
   const isFanza = isFanzaId(id);
 
   if (isFanza) {
     LOG.task.info(id, '从 Fanza (DMM) 抓取元数据...');
-    let metadata = null;
+    let metadata: ScannerWorkMetadata | null = null;
 
     try {
       metadata = await scrapeWorkMetadataFromFanza(id);
     } catch(error) {
-      LOG.task.warn(id, `Fanza获取元数据失败: ${error.message}`);
+      LOG.task.warn(id, `Fanza获取元数据失败: ${(error as Error).message}`);
     }
 
     if (metadata === null) {
@@ -222,9 +299,9 @@ async function getMetadata(id, rootFolderName, dir) {
     metadata.dir = dir;
 
     try {
-      await db.insertWorkMetadata(metadata);
+      await db.insertWorkMetadata(metadata as InsertableWorkMetadata);
     } catch(error) {
-      LOG.task.error(id, `元数据添加失败: ${error.message}`);
+      LOG.task.error(id, `元数据添加失败: ${(error as Error).message}`);
       return 'failed';
     }
 
@@ -239,19 +316,19 @@ async function getMetadata(id, rootFolderName, dir) {
 
   LOG.task.info(rjcode, '从 DLSite 抓取元数据...');
       
-  let metadata = null;
+  let metadata: ScannerWorkMetadata | null = null;
 
   try {
     metadata = await scrapeWorkMetadataFromDLsite(id); // 抓取该音声的元数据
   } catch(error) {
-    LOG.task.warn(rjcode, `DLSite获取元数据失败: ${error.message}`);
+    LOG.task.warn(rjcode, `DLSite获取元数据失败: ${(error as Error).message}`);
   }
 
   if (metadata === null) {
     try {
       metadata = await scrapeWorkMetadataFromAsmrOne(id); // 抓取该音声的元数据
     } catch(error) {
-      LOG.task.warn(rjcode, `AsmrOne获取元数据失败: ${error.message}`);
+      LOG.task.warn(rjcode, `AsmrOne获取元数据失败: ${(error as Error).message}`);
     }
   }
 
@@ -259,7 +336,7 @@ async function getMetadata(id, rootFolderName, dir) {
     try {
       metadata = await scrapeWorkMetadataFromDLsiteJson(id); // 抓取该音声的元数据
     } catch(error) {
-      LOG.task.warn(rjcode, `DLSite json api获取元数据失败: ${error.message}`);
+      LOG.task.warn(rjcode, `DLSite json api获取元数据失败: ${(error as Error).message}`);
     }
   }
 
@@ -275,9 +352,9 @@ async function getMetadata(id, rootFolderName, dir) {
   metadata.dir = dir;
 
   try {
-    await db.insertWorkMetadata(metadata);
+    await db.insertWorkMetadata(metadata as InsertableWorkMetadata);
   } catch(error) {
-    LOG.task.error(rjcode, `元数据添加失败: ${error.message}`);
+    LOG.task.error(rjcode, `元数据添加失败: ${(error as Error).message}`);
     return 'failed';
   }
 
@@ -309,11 +386,11 @@ async function getMetadata(id, rootFolderName, dir) {
  * @param {Array} types img types: ['main', 'sam', 'sam@2x', 'sam@3x', '240x240', '360x360']
  * @param {Object} [asmrOneCoverUrls] cover urls already known from an ASMR.one metadata scrape
  */
-async function getCoverImageForTranslated(id, types, asmrOneCoverUrls) {
+async function getCoverImageForTranslated(id: string, types: string[], asmrOneCoverUrls?: CoverUrls | null): Promise<'added' | 'failed' | 'skipped'> {
   const rjcode = formatID(id); // zero-pad to 6/8 digits
   let coverFromId = rjcode; // 默认就使用原始的作品id
   let isNoImgMain = false;
-  let realCoverUrls = {};
+  let realCoverUrls: CoverUrls = {};
 
   try {
     // 抓取一次网页，检查当前作品封面到底使用的哪一个id
@@ -328,12 +405,12 @@ async function getCoverImageForTranslated(id, types, asmrOneCoverUrls) {
       LOG.task.info(rjcode, `当前作品${workno(rjcode)}似乎不包含封面资源，例如一些翻译作品。从 DLsite 对应的原始作品${workno(coverFromId)}下载封面...`);
     }
   } catch (err) {
-    LOG.task.error(rjcode, `在获取真实的封面id（适配那些翻译作品的封面问题） 过程中出错: ${err.message}`);
+    LOG.task.error(rjcode, `在获取真实的封面id（适配那些翻译作品的封面问题） 过程中出错: ${(err as Error).message}`);
   }
 
   LOG.task.info(rjcode, `从 DLsite 下载封面...`);
   let failedTypes = await downloadCovers(id, types, (type) => [
-    realCoverUrls[type],
+    realCoverUrls[type as keyof CoverUrls],
     guessDLsiteCoverUrl(coverFromId, type),
   ]);
 
@@ -341,7 +418,7 @@ async function getCoverImageForTranslated(id, types, asmrOneCoverUrls) {
     const urls = await getAsmrOneCoverUrls(id, asmrOneCoverUrls);
     if (urls) {
       LOG.task.info(rjcode, `DLsite 封面下载失败，尝试从 ASMR.one 下载...`);
-      failedTypes = await downloadCovers(id, failedTypes, (type) => [urls[type]]);
+      failedTypes = await downloadCovers(id, failedTypes, (type) => [urls[type as keyof CoverUrls]]);
     }
   }
 
@@ -364,7 +441,7 @@ async function getCoverImageForTranslated(id, types, asmrOneCoverUrls) {
  * @param {Object} [known] map of type -> url from a previous ASMR.one scrape
  * @returns {Promise<Object|null>} map of type -> url, or null when unavailable
  */
-async function getAsmrOneCoverUrls(id, known) {
+async function getAsmrOneCoverUrls(id: string, known?: CoverUrls | null): Promise<CoverUrls | null> {
   if (known && (known.main || known.sam || known['240x240'])) {
     return known;
   }
@@ -377,7 +454,7 @@ async function getAsmrOneCoverUrls(id, known) {
       '240x240': meta.thumbnailCoverUrl,
     };
   } catch (err) {
-    LOG.task.warn(formatID(id), `尝试从 ASMR.one 获取封面 URL 失败: ${err.message}`);
+    LOG.task.warn(formatID(id), `尝试从 ASMR.one 获取封面 URL 失败: ${(err as Error).message}`);
     return null;
   }
 }
@@ -389,12 +466,12 @@ async function getAsmrOneCoverUrls(id, known) {
  * @param {String} type img type
  * @returns {String} guessed cover URL
  */
-function guessDLsiteCoverUrl(cover_from_id, type) {
+function guessDLsiteCoverUrl(cover_from_id: string, type: string): string {
   // The books floor keeps its assets under work/books/BJ..., the doujin floor
   // under work/doujin/RJ...; the bucket rule is the same on both.
   const books = isBooksId(cover_from_id);
   const floor = books ? 'books' : 'doujin';
-  const codeFor = num => workno(books ? `BJ${formatID(num)}` : formatID(num));
+  const codeFor = (num: number): string => workno(books ? `BJ${formatID(num)}` : formatID(num));
 
   const n = parseInt(String(cover_from_id).replace(/\D/g, ''), 10);
   const id2 = (n % 1000 === 0) ? n : Math.floor(n / 1000) * 1000 + 1000;
@@ -413,23 +490,27 @@ function guessDLsiteCoverUrl(cover_from_id, type) {
  * @param {Function} candidatesFor type => candidate URLs, tried in order (falsy entries skipped)
  * @returns {Promise<Array>} the types that could not be downloaded
  */
-async function downloadCovers(cover_for_id, types, candidatesFor) {
+async function downloadCovers(
+  cover_for_id: string,
+  types: string[],
+  candidatesFor: (type: string) => Array<string | null | undefined>,
+): Promise<string[]> {
   const cover_for_rjcode = formatID(cover_for_id);
-  const results = await Promise.all(types.map(async (type) => {
-    for (const url of candidatesFor(type).filter(Boolean)) {
+  const results = await Promise.all(types.map(async (type): Promise<string | null> => {
+    for (const url of candidatesFor(type).filter((url): url is string => Boolean(url))) {
       try {
-        const imageRes = await axios.retryGet(url, { responseType: "stream", retry: {} });
+        const imageRes = await axios.retryGet<NodeJS.ReadableStream>(url, { responseType: "stream", retry: {} });
         await saveCoverImageToDisk(imageRes.data, cover_for_rjcode, type);
         LOG.task.info(cover_for_rjcode, `封面 ${coverFileName(cover_for_rjcode, type)} 下载成功.`);
         return null;
       } catch (err) {
-        LOG.task.warn(cover_for_rjcode, `在下载封面 ${coverFileName(cover_for_rjcode, type)} 过程中出错: ${err.message} (URL: ${url})`);
+        LOG.task.warn(cover_for_rjcode, `在下载封面 ${coverFileName(cover_for_rjcode, type)} 过程中出错: ${(err as Error).message} (URL: ${url})`);
       }
     }
     return type;
   }));
 
-  return results.filter(Boolean);
+  return results.filter((type): type is string => Boolean(type));
 }
 
 /**
@@ -441,14 +522,14 @@ async function downloadCovers(cover_for_id, types, candidatesFor) {
  *        digital/cg_game, ...), so prefer these over the guessed fallback.
  * @returns {Promise<String>} 'added' or 'failed'
  */
-async function getFanzaCoverImage(id, types, coverUrls) {
+async function getFanzaCoverImage(id: string, types: string[], coverUrls?: CoverUrls | null): Promise<'added' | 'failed'> {
   const cid = fanzaCid(id);
   if (!coverUrls) {
     try {
       const metadata = await scrapeWorkMetadataFromFanza(id);
       coverUrls = metadata.coverUrls;
     } catch (err) {
-      LOG.task.warn(id, `重新抓取 Fanza 页面以获取封面 URL 失败: ${err.message}，将尝试推测的封面 URL`);
+      LOG.task.warn(id, `重新抓取 Fanza 页面以获取封面 URL 失败: ${(err as Error).message}，将尝试推测的封面 URL`);
     }
   }
   // Fallback only: wrong for works whose assets are not under digital/doujin.
@@ -467,7 +548,7 @@ async function getFanzaCoverImage(id, types, coverUrls) {
     }
 
     try {
-      const imageRes = await axios.retryGet(url, { responseType: "stream", retry: {} });
+      const imageRes = await axios.retryGet<NodeJS.ReadableStream>(url, { responseType: "stream", retry: {} });
       // DMM serves a 302 to a now_printing.jpg placeholder for nonexistent
       // cover variants (axios follows it silently). Never save that as a cover.
       const finalUrl = imageRes.request && imageRes.request.res && imageRes.request.res.responseUrl;
@@ -479,7 +560,7 @@ async function getFanzaCoverImage(id, types, coverUrls) {
       LOG.task.info(id, `封面 ${coverFileName(id, type)} 下载成功.`);
       return 'added';
     } catch(err) {
-      LOG.task.warn(id, `在下载封面 ${coverFileName(id, type)} 过程中出错: ${err.message} (URL: ${url})`);
+      LOG.task.warn(id, `在下载封面 ${coverFileName(id, type)} 过程中出错: ${(err as Error).message} (URL: ${url})`);
       return 'failed';
     }
   }));
@@ -491,20 +572,20 @@ async function getFanzaCoverImage(id, types, coverUrls) {
 
 // Route workExtras' output through the scanner's task log so image and review
 // progress shows up in the Scanner page like every other per-work message.
-const extrasLogger = {
+const extrasLogger: workExtras.WorkExtrasLogger = {
   info: (id, message) => LOG.task.info(id, message),
   warn: (id, message) => LOG.task.warn(id, message),
 };
 
-const saveWorkImages = (id, metadata) => workExtras.saveWorkImages(id, metadata, extrasLogger);
-const saveWorkReviews = id => workExtras.saveWorkReviews(id, extrasLogger);
+const saveWorkImages = (id: string, metadata: ScannerWorkMetadata) => workExtras.saveWorkImages(id, metadata, extrasLogger);
+const saveWorkReviews = (id: string) => workExtras.saveWorkReviews(id, extrasLogger);
 
 /**
  * 获取音声元数据，获取音声封面图片，
  * 返回一个 Promise 对象，处理结果: 'added', 'skipped' or 'failed'
  * @param {string} folder 音声文件夹对象 { relativePath: '相对路径', rootFolderName: '根文件夹别名', id: '音声ID' }
  */
-async function processFolder(folder) {
+async function processFolder(folder: FolderEntry): Promise<FolderResult> {
   const res = await db.knex('t_work')
     .select('id')
     .where('id', '=', folder.id)
@@ -514,14 +595,15 @@ async function processFolder(folder) {
   const workId = folder.id;
   const isFanza = isFanzaId(workId);
   const coverTypes = ['main', 'sam', '240x240'];
-  const count = res['count(*)'];
+  // The count query always returns one row; the assertion only states that.
+  const count = res!['count(*)'];
 
-  let coverResult = "unknown";
+  let coverResult: 'unknown' | 'added' | 'failed' | 'skipped' = "unknown";
 
   if (count) { // 查询数据库，检查是否已经写入该音声的元数据
     // 已经成功写入元数据
     // 检查音声封面图片是否缺失
-    const lostCoverTypes = [];
+    const lostCoverTypes: string[] = [];
     coverTypes.forEach(type => {
       const coverPath = path.join(config.coverFolderDir, coverFileName(workId, type));
       if (!fs.existsSync(coverPath)) {
@@ -590,7 +672,7 @@ const limitP = new LimitPromise(MAX); // 核心控制器
  * 限制 processFolder 并发数量，
  * 使用控制器包装 processFolder 方法，实际上是将请求函数递交给控制器处理
  */
-async function processFolderLimited(folder){
+async function processFolderLimited(folder: FolderEntry): Promise<FolderResult> {
   return await limitP.call(processFolder, folder);
 }
 
@@ -616,8 +698,8 @@ async function performCleanup() {
       await deleteCoverImageFromDisk(work.id);
       await deleteWorkImagesFromDisk(work.id);
     } catch(err) {
-      if (err && err.code !== 'ENOENT') { 
-          LOG.main.error(`[${work.id}] 在删除封面过程中出错: ${err.message}`);
+      if (err && (err as NodeJS.ErrnoException).code !== 'ENOENT') { 
+          LOG.main.error(`[${work.id}] 在删除封面过程中出错: ${(err as Error).message}`);
       }
     }
   }));
@@ -626,12 +708,12 @@ async function performCleanup() {
 }
 
 // 尝试创建数据库
-async function tryCreateDatabase() {
+async function tryCreateDatabase(): Promise<void> {
   try {
     await createSchema();
   } catch(err) {
-    LOG.main.error(`在构建数据库结构过程中出错: ${err.message}`);
-    console.error(err.stack);
+    LOG.main.error(`在构建数据库结构过程中出错: ${(err as Error).message}`);
+    console.error((err as Error).stack);
     process.exit(1);
   }
 }
@@ -646,8 +728,8 @@ async function tryCreateAdminUser() {
       group: 'administrator'
     });
   } catch(err) {
-    if (err.message.indexOf('已存在') === -1) {
-      LOG.main.error(`在创建 admin 账号时出错: ${err.message}`);
+    if ((err as Error).message.indexOf('已存在') === -1) {
+      LOG.main.error(`在创建 admin 账号时出错: ${(err as Error).message}`);
       process.exit(1);
     }
   }
@@ -655,7 +737,7 @@ async function tryCreateAdminUser() {
 
 // 修复以往的数据库问题，老逻辑了，不太清楚具体修复的问题是什么，先放在这里
 // 成功返回true，失败返回false
-async function fixVADatabase() {
+async function fixVADatabase(): Promise<boolean> {
   // Fix hash collision bug in t_va
   // Scan to repopulate the Voice Actor data for those problematic works
   // かの仔 and こっこ
@@ -667,7 +749,7 @@ async function fixVADatabase() {
       updateLock.removeLockFile();
       LOG.main.log('完成元数据修复');
     } catch (err) {
-      LOG.main.error(err.toString());
+      LOG.main.error((err as Error).toString());
       success = false;
     }
   }
@@ -676,7 +758,7 @@ async function fixVADatabase() {
 
 // 尝试清理不存在的数据，该阶段可能会根据用户配置跳过
 // 如果清理过程中发生一场则杀死该进程
-async function tryCleanupStage() {
+async function tryCleanupStage(): Promise<void> {
   if (config.skipCleanup) {
     LOG.main.info('跳过清理“不存在的音声数据”');
   } else {
@@ -685,7 +767,7 @@ async function tryCleanupStage() {
       await performCleanup();
       LOG.main.info('清理完成. 现在开始扫描...');
     } catch(err) {
-      LOG.main.error(`在执行清理过程中出错: ${err.message}`);
+      LOG.main.error(`在执行清理过程中出错: ${(err as Error).message}`);
       process.exit(1);
     }
   }
@@ -693,8 +775,8 @@ async function tryCleanupStage() {
 
 // 尝试扫描所有媒体库的文件夹
 // 返回扫描得到的work的文件夹
-async function tryScanRootFolders() {
-  let folderList = [];
+async function tryScanRootFolders(): Promise<FolderEntry[]> {
+  let folderList: FolderEntry[] = [];
   try {
     for (const rootFolder of config.rootFolders) {
       for await (const folder of getFolderList(rootFolder, '', 0, LOG.main)) {
@@ -703,7 +785,7 @@ async function tryScanRootFolders() {
     }
     LOG.main.info(`共找到 ${folderList.length} 个音声文件夹.`);
   } catch (err) {
-    LOG.main.error(`在扫描根文件夹的过程中出错: ${err.message}`);
+    LOG.main.error(`在扫描根文件夹的过程中出错: ${(err as Error).message}`);
     process.exit(1);
   }
 
@@ -718,8 +800,8 @@ async function tryScanRootFolders() {
 //   skipped: 0, // 跳过
 //   updated: 0, // 更新
 // };
-async function tryProcessFolderListParallel(folderList) {
-  const counts = {
+async function tryProcessFolderListParallel(folderList: FolderEntry[]): Promise<ScanCounts> {
+  const counts: ScanCounts = {
     added: 0,
     failed: 0,
     skipped: 0,
@@ -738,14 +820,14 @@ async function tryProcessFolderListParallel(folderList) {
         // duplicateSet中并不包含存在于uniqueFolderList中的文件夹，
         // 将unique和duplicate重复的选项添加回duplicateSet，方便用户观察那些文件夹是重复的
         const addedFolder = uniqueFolderList.find(folder => folder.id === key);
-        duplicateSet[key].push(addedFolder); // 最后一项为是被添加到数据库中的音声文件夹，将其一同展示给用户
+        duplicateSet[key].push(addedFolder!); // 最后一项为是被添加到数据库中的音声文件夹，将其一同展示给用户
 
         LOG.main.info(`[${key}] 存在多个文件夹:`);
 
         // 打印音声文件夹的绝对路径
         duplicateSet[key].forEach((folder) => {
           const rootFolder = config.rootFolders.find(rootFolder => rootFolder.name === folder.rootFolderName);
-          const absolutePath = path.join(rootFolder.path, folder.relativePath);
+          const absolutePath = path.join(rootFolder!.path, folder.relativePath);
           LOG.main.info(`--> ${absolutePath}`);
         });
       }
@@ -768,8 +850,8 @@ async function tryProcessFolderListParallel(folderList) {
     }));
 
   } catch (err) {
-    LOG.main.error(`在并行处理音声文件夹过程中出错: ${err.message}`);
-    console.error(err.stack);
+    LOG.main.error(`在并行处理音声文件夹过程中出错: ${(err as Error).message}`);
+    console.error((err as Error).stack);
     process.exit(1);
   }
 
@@ -780,14 +862,14 @@ async function tryProcessFolderListParallel(folderList) {
  * 执行扫描
  * createCoverFolder => createSchema => cleanup => getAllFolderList => processAllFolder
  */
-async function performScan() {
+async function performScan(): Promise<void> {
   LOG.open('scan');
 
   if (!fs.existsSync(config.coverFolderDir)) {
     try {
       fs.mkdirSync(config.coverFolderDir, { recursive: true });
     } catch(err) {
-      LOG.main.error(`在创建存放音声封面图片的文件夹时出错: ${err.message}`);
+      LOG.main.error(`在创建存放音声封面图片的文件夹时出错: ${(err as Error).message}`);
       process.exit(1);
     }
   }
@@ -796,7 +878,7 @@ async function performScan() {
     try {
       fs.mkdirSync(config.imageFolderDir, { recursive: true });
     } catch(err) {
-      LOG.main.error(`在创建存放作品图片的文件夹时出错: ${err.message}`);
+      LOG.main.error(`在创建存放作品图片的文件夹时出错: ${(err as Error).message}`);
       process.exit(1);
     }
   }
@@ -825,10 +907,10 @@ async function performScan() {
  * @param {string} id work id (e.g. '123456', 'd215444')
  * @param {options = {}} options includeVA, includeTags, refreshAll, etc.
  */
-async function updateMetadata(id, options = {}) {
+async function updateMetadata(id: string, options: UpdateMetadataOptions = {}): Promise<RefreshResult> {
   const isFanza = isFanzaId(id);
 
-  let scrapeProcessor;
+  let scrapeProcessor: () => Promise<WorkMetadata>;
   if (isFanza) {
     // Fanza: only static scraping is available
     scrapeProcessor = () => scrapeWorkMetadataFromFanza(id);
@@ -836,7 +918,10 @@ async function updateMetadata(id, options = {}) {
     // static + dynamic
     scrapeProcessor = () => scrapeWorkMetadataFromDLsite(id);
   } else {
-    scrapeProcessor = () => scrapeDynamicWorkMetadataFromDLsite(id);
+    // The dynamic-only scrape returns the counters alone, which is all
+    // updateWorkMetadata reads unless one of the flags above asked for labels;
+    // that branch chose the static processor instead.
+    scrapeProcessor = () => scrapeDynamicWorkMetadataFromDLsite(id) as Promise<WorkMetadata>;
   }
 
   const displayId = isFanza ? id : formatID(id);
@@ -863,19 +948,23 @@ async function updateMetadata(id, options = {}) {
     return 'updated';
   } catch(err) {
     LOG.task.error(displayId, `在抓取元数据过程中出错: ${err}`);
-    console.error(err.stack);
+    console.error((err as Error).stack);
     return 'failed';
   }
 }
 
-const updateMetadataLimited = (id, options = null) => limitP.call(updateMetadata, id, options);
-const updateVoiceActorLimited = (id) => limitP.call(updateMetadata, id, { includeVA: true });
+// `options` has always defaulted to null and been handed straight to
+// updateMetadata, which reads the flags off it; updater.ts always passes an
+// object, so the assertion states the assumption the body already makes.
+const updateMetadataLimited = (id: string, options: UpdateMetadataOptions | null = null) =>
+  limitP.call(updateMetadata, id, options as UpdateMetadataOptions);
+const updateVoiceActorLimited = (id: string) => limitP.call(updateMetadata, id, { includeVA: true });
 
  
-async function performUpdate(options = null) {
+async function performUpdate(options: UpdateMetadataOptions | null = null): Promise<void> {
   LOG.open('update');
   const baseQuery = db.knex('t_work').select('id');
-  const processor = (id) => updateMetadataLimited(id, options);
+  const processor = (id: string) => updateMetadataLimited(id, options);
 
   const counts = await refreshWorks(baseQuery, 'id', processor);
 
@@ -885,23 +974,27 @@ async function performUpdate(options = null) {
   if (counts.failed) process.exit(1);
 }
 
-async function fixVoiceActorBug() {
+async function fixVoiceActorBug(): Promise<RefreshCounts> {
   const baseQuery = db.knex('r_va_work').select('va_id', 'work_id');
-  const filter = (query) => query.where('va_id', nameToUUID('かの仔')).orWhere('va_id', nameToUUID('こっこ'));
-  const processor = (id) => updateVoiceActorLimited(id);
+  const filter = (query: typeof baseQuery) => query.where('va_id', nameToUUID('かの仔')).orWhere('va_id', nameToUUID('こっこ'));
+  const processor = (id: string) => updateVoiceActorLimited(id);
   return await refreshWorks(filter(baseQuery), 'work_id', processor);
 }
 
-async function refreshWorks(query, idColumnName, processor) {
+async function refreshWorks(
+  query: Knex.QueryBuilder,
+  idColumnName: string,
+  processor: (id: string) => Promise<RefreshResult>,
+): Promise<RefreshCounts> {
   const works = await query;
   LOG.main.info(`共 ${works.length} 个作品. 开始刷新`);
 
-  const counts = {
+  const counts: RefreshCounts = {
     updated: 0,
     failed: 0,
   }; 
 
-  await Promise.all(works.map(async (work) => {
+  await Promise.all(works.map(async (work: Record<string, string>) => {
     const workid = work[idColumnName];
     const displayId = isFanzaId(workid) ? workid : formatID(workid);
     
@@ -919,7 +1012,7 @@ async function refreshWorks(query, idColumnName, processor) {
 }
 
 // Re-index one work's folder: its file listing and audio durations.
-async function scanWorkFile(work, index, total) {
+async function scanWorkFile(work: WorkFileScanRow, index: number, total: number): Promise<'updated' | 'skipped' | 'failed'> {
   const displayId = isFanzaId(work.id) ? work.id : formatID(work.id);
 
   LOG.main.info(`扫描进度：${index+1}/${total}`);
@@ -934,15 +1027,16 @@ async function scanWorkFile(work, index, total) {
     return "updated";
   } catch(error) {
     LOG.main.error(`[${displayId}] Failed to scan work files: ${error}`);
-    console.error(error.stack);
+    console.error((error as Error).stack);
     return "failed";
   }
 }
-const scanWorkFileLimited = (work, index, total) => limitP.call(scanWorkFile, work, index, total);
-async function performWorkFileScan() {
+const scanWorkFileLimited = (work: WorkFileScanRow, index: number, total: number) =>
+  limitP.call(scanWorkFile, work, index, total);
+async function performWorkFileScan(): Promise<void> {
   LOG.open('files');
   LOG.main.info(`扫描本地文件开始`);
-  const works = await db.knex('t_work').select('id', "root_folder", "dir");
+  const works: WorkFileScanRow[] = await db.knex('t_work').select('id', "root_folder", "dir");
   LOG.main.info(`总计 ${works.length} 个作品`);
 
   const results = await Promise.all(works.map((work, index) => scanWorkFileLimited(work, index, works.length)));

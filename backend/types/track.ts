@@ -25,3 +25,10 @@ export interface Track {
   /** Audio only: display title from `t_work_file.track_title`. */
   trackTitle?: string;
 }
+
+/**
+ * A track as `getTrackList` produces it: a walk of the disk, so the absolute
+ * path is always set. `probeAudioDurations` stats it, and `indexWorkFiles`
+ * hands the walk to the database layer.
+ */
+export type WalkedTrack = Track & { fullPath: string };

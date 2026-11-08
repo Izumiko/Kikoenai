@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Client for an external transcription (ASR) server: POST <base>/transcribe,
  * audio in, subtitle out. The query string is opaque so a server's own knobs
@@ -19,10 +18,25 @@ import { request } from 'undici';
 
 /** A failure to show the user, as opposed to a bug. */
 class AsrError extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = 'AsrError';
   }
+}
+
+/** What `asrConfig` reads out of the environment. */
+interface AsrConfig {
+  /** `KIKO_ASR_BASE_URL`; presence is what `isAsrConfigured` reports. */
+  baseUrl?: string;
+  query: string;
+  apiKey?: string;
+  timeoutMs: number;
+}
+
+/** One transcribed track: the extension the Content-Type picked, and the body. */
+export interface TranscribeResult {
+  ext: string;
+  body: string;
 }
 
 /**
@@ -33,13 +47,13 @@ class AsrError extends Error {
  * server sends it for both `format=lrc` and `format=txt`, so the header
  * cannot say which arrived.
  */
-const SUBTITLE_TYPES = {
+const SUBTITLE_TYPES: Record<string, string | undefined> = {
   'application/x-subrip': '.srt',
   'text/vtt': '.vtt',
   'text/plain': '.txt',
 };
 
-const asrConfig = () => ({
+const asrConfig = (): AsrConfig => ({
   baseUrl: process.env.KIKO_ASR_BASE_URL,
   // Defaulted because the reference server answers JSON otherwise, which is
   // unusable here. WebVTT over SubRip: only its `<v Name>` voice span can name
@@ -48,16 +62,16 @@ const asrConfig = () => ({
   query: process.env.KIKO_ASR_QUERY === undefined ? 'format=vtt' : process.env.KIKO_ASR_QUERY,
   apiKey: process.env.KIKO_ASR_API_KEY,
   // Per track, not per work.
-  timeoutMs: parseInt(process.env.KIKO_ASR_TIMEOUT_MS, 10) || 1800000,
+  timeoutMs: parseInt(process.env.KIKO_ASR_TIMEOUT_MS ?? '', 10) || 1800000,
 });
 
-const isAsrConfigured = () => Boolean(process.env.KIKO_ASR_BASE_URL);
+const isAsrConfigured = (): boolean => Boolean(process.env.KIKO_ASR_BASE_URL);
 
 /**
  * Fold a per-run query string onto the configured one, key by key, so adding
  * `hotwords` for one work keeps `format=vtt`. A key in the override wins.
  */
-const mergeQuery = (configured, override) => {
+const mergeQuery = (configured: string, override?: string): string => {
   if (!override) return configured;
 
   const merged = new URLSearchParams(configured);
@@ -76,15 +90,20 @@ const mergeQuery = (configured, override) => {
  * @returns {Promise<{ext: String, body: String}|null>} null for a silent
  *   track; an empty sidecar would look done and block a retry.
  */
-async function transcribe(filePath, { signal, query } = {}) {
+async function transcribe(
+  filePath: string,
+  { signal, query }: { signal?: AbortSignal; query?: string } = {},
+): Promise<TranscribeResult | null> {
   const { baseUrl, query: configured, apiKey, timeoutMs } = asrConfig();
 
-  const url = new URL(`${baseUrl.replace(/\/$/, '')}/transcribe`);
+  // Callers go through isAsrConfigured() first; the assertion only says the
+  // body already assumes a base URL is present.
+  const url = new URL(`${baseUrl!.replace(/\/$/, '')}/transcribe`);
   url.search = mergeQuery(configured, query);
 
   const { size } = await fs.promises.stat(filePath);
 
-  const headers = {
+  const headers: Record<string, string> = {
     'content-type': 'application/octet-stream',
     // Mandatory, and the reason for undici's request() over fetch(): a stream
     // body goes out chunked otherwise, which the reference server rejects, and
@@ -115,16 +134,17 @@ async function transcribe(filePath, { signal, query } = {}) {
     });
   } catch (err) {
     stream.destroy();
+    const error = err as Error & { cause?: { code?: string; name?: string; message?: string } };
     if (timeout.aborted) {
       throw new AsrError(
         `ASR server did not answer within ${Math.round(timeoutMs / 1000)}s. `
         + 'Raise KIKO_ASR_TIMEOUT_MS (milliseconds) or use a faster model.',
       );
     }
-    if (err.name === 'AbortError') throw err;
+    if (error.name === 'AbortError') throw err;
     // undici puts the real reason on `cause`.
-    const cause = err.cause;
-    throw new AsrError(`ASR request failed: ${cause ? `${cause.code || cause.name}: ${cause.message}` : err.message}`);
+    const cause = error.cause;
+    throw new AsrError(`ASR request failed: ${cause ? `${cause.code || cause.name}: ${cause.message}` : error.message}`);
   }
 
   const body = await res.body.text();

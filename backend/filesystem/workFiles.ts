@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * A work's file listing, read from the database rather than the disk.
  */
@@ -9,12 +8,27 @@ import { orderBy } from 'natural-orderby';
 import db from '../database/db.ts';
 import { config } from '../config.ts';
 import { getTrackList, probeAudioDurations, supportedMediaExtList } from './utils.ts';
+import type { KnownProbe } from './utils.ts';
+import type { Track, WalkedTrack } from '../types/track.ts';
+import type { WorkFileRow } from '../types/db.ts';
+
+/**
+ * The slice of the database the listing uses. Every entry point takes one, so
+ * tests can inject an in-memory knex -- the same convention the scripts use.
+ */
+export type WorkFilesDb = Pick<typeof db, 'knex' | 'getWorkFiles' | 'replaceWorkFiles'>;
+
+/** A `t_work_file` row as the listing reads it. */
+type WorkFileSelectRow = Pick<WorkFileRow, 'rel_path' | 'duration' | 'mtime' | 'track_title'>;
+
+/** A shaped row before the absolute path is stripped from it. */
+type ShapedTrack = Track & { fullPath?: string };
 
 /**
  * Generated subtitles that could not be written next to the audio. Mirrors the
  * work folder's layout, so one relPath addresses a file in either place.
  */
-const overlayDir = (workId) => path.join(config.lyricFolderDir, String(workId));
+const overlayDir = (workId: string): string => path.join(config.lyricFolderDir, String(workId));
 
 /**
  * Fold the overlay into a walk of the work folder, at index time rather than
@@ -24,7 +38,7 @@ const overlayDir = (workId) => path.join(config.lyricFolderDir, String(workId));
  * A file in both places collapses to the library's copy: rel_path is the
  * primary key, and a hand-made sidecar should beat a generated one.
  */
-const mergeOverlay = async (workId, walked) => {
+const mergeOverlay = async (workId: string, walked: WalkedTrack[]): Promise<WalkedTrack[]> => {
   const dir = overlayDir(workId);
   if (!fs.existsSync(dir)) return walked;
 
@@ -37,8 +51,8 @@ const mergeOverlay = async (workId, walked) => {
  * Shape stored rows exactly the way getTrackList shapes a walk, including the
  * sort.
  */
-const shapeRows = (workId, workDir, rows) => {
-  const shaped = rows.map((row) => {
+const shapeRows = (workId: string, workDir: string, rows: WorkFileSelectRow[]): Track[] => {
+  const shaped: ShapedTrack[] = rows.map((row) => {
     const relPath = row.rel_path;
     const dirName = path.dirname(relPath);
     return {
@@ -74,7 +88,7 @@ const shapeRows = (workId, workDir, rows) => {
  * titles for files that are still there.
  * @returns {Promise<Array>} the shaped track list, as listWorkTracks returns.
  */
-async function indexWorkFiles (workId, workDir, tracks, dbApi = db) {
+async function indexWorkFiles (workId: string, workDir: string, tracks?: WalkedTrack[], dbApi: WorkFilesDb = db): Promise<Track[]> {
   const walked = await mergeOverlay(workId, tracks || await getTrackList(workId, workDir));
   const existing = await dbApi.getWorkFiles(workId);
   const byRelPath = new Map(existing.map((row) => [row.rel_path, row]));
@@ -99,7 +113,7 @@ async function indexWorkFiles (workId, workDir, tracks, dbApi = db) {
 /**
  * A work's tracks, from the database.
  */
-async function listWorkTracks (workId, workDir, { indexedAt, dbApi = db } = {}) {
+async function listWorkTracks (workId: string, workDir: string, { indexedAt, dbApi = db }: { indexedAt?: string | null; dbApi?: WorkFilesDb } = {}): Promise<Track[]> {
   if (indexedAt === undefined) {
     const work = await dbApi.knex('t_work').select('files_indexed_at').where('id', workId).first();
     indexedAt = work ? work.files_indexed_at : null;
@@ -115,9 +129,9 @@ async function listWorkTracks (workId, workDir, { indexedAt, dbApi = db } = {}) 
 /**
  * @returns {Promise<Array>} the shaped track list
  */
-async function rescanWorkFiles (workId, workDir, dbApi = db) {
+async function rescanWorkFiles (workId: string, workDir: string, dbApi: WorkFilesDb = db): Promise<Track[]> {
   const existing = await dbApi.getWorkFiles(workId);
-  const known = new Map(existing.map((row) => [
+  const known = new Map<string, KnownProbe>(existing.map((row) => [
     row.rel_path,
     { duration: row.duration ?? undefined, mtime: row.mtime ?? undefined },
   ]));

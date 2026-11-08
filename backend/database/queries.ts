@@ -423,8 +423,14 @@ const makeQueries = (knex: Knex) => {
 
   /**
    * Takes a work metadata object and inserts it into the database.
+   *
+   * The scanner adds the location before inserting, and both columns are NOT
+   * NULL in `t_work`, so the signature requires them rather than leaving the
+   * scanner to remember.
    */
-  const insertWorkMetadata = async (work: WorkMetadata) => knex.transaction(async (trx) => {
+  const insertWorkMetadata = async (
+    work: WorkMetadata & Required<Pick<WorkMetadata, 'rootFolderName' | 'dir'>>,
+  ) => knex.transaction(async (trx) => {
     // Resolve circle UUID by name. A page with no circle leaves the name
     // undefined, which nameToUUID then rejects — unchanged upstream behaviour;
     // the assertion only states what the DB contract already assumes.

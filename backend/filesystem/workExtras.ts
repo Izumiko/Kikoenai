@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Sample/description image download and DLsite review scraping.
 
 import fs from 'fs';
@@ -9,16 +8,45 @@ import db from '../database/db.ts';
 import { config } from '../config.ts';
 import { scrapeWorkReviewsFromDLsite } from '../scraper/dlsite.ts';
 import { formatID, workImageFileName, saveWorkImageToDisk, collectWorkImages, deleteWorkImagesFromDisk } from './utils.ts';
+import type { WorkImage } from './utils.ts';
 import { isFanzaId, workno } from '../work-id.ts';
+import type { SampleImage, ScrapedWorkMetadata } from '../types/scraper.ts';
 
-const displayIdOf = id => (isFanzaId(id) ? id : formatID(id));
+/** What these functions log with: `console` by default, the scanner's LOG otherwise. */
+export interface WorkExtrasLogger {
+  info(id: string, message: string): void;
+  warn(id: string, message: string): void;
+}
+
+/** The work-page fields the image downloader reads. */
+type WorkImageMetadata = Pick<ScrapedWorkMetadata, 'sampleImages' | 'descriptionParts'>;
+
+/** One image this run intends to write, plus the file name it goes to. */
+interface TargetImage extends WorkImage {
+  file: string;
+}
+
+/** One entry of the returned list; `file` is null when the download failed. */
+export interface WorkImageTarget extends WorkImage {
+  file: string | null;
+}
+
+/** Options of one image download. */
+interface DownloadImagesOptions {
+  /** Stored sample_images, so an image already on disk is not fetched again. */
+  previous?: SampleImage[];
+  /** Images to fetch at once. */
+  concurrency?: number;
+}
+
+const displayIdOf = (id: string): string => (isFanzaId(id) ? id : formatID(id));
 
 // separate limit for single work refresh
 const REFRESH_IMAGE_CONCURRENCY = 4;
 
-const IMAGE_KIND_LABEL = { smp: '预览图', part: '说明图' };
+const IMAGE_KIND_LABEL: Record<string, string> = { smp: '预览图', part: '说明图' };
 
-const consoleLogger = {
+const consoleLogger: WorkExtrasLogger = {
   info: (id, message) => console.log(`[${workno(id)}] ${message}`),
   warn: (id, message) => console.warn(`[${workno(id)}] ${message}`),
 };
@@ -29,7 +57,7 @@ const consoleLogger = {
  * the cheaper behaviour rather than silently keeping the expensive one.
  * @returns {Boolean}
  */
-const skipWorkExtras = () => config.skipWorkExtras !== false;
+const skipWorkExtras = (): boolean => config.skipWorkExtras !== false;
 
 /**
  * Split a run's targets into the ones already on disk and the ones to fetch.
@@ -44,14 +72,18 @@ const skipWorkExtras = () => config.skipWorkExtras !== false;
  * @param {Set<String>} onDisk File names currently in the image folder.
  * @returns {{reuse: Array<Object>, fetch: Array<Object>}}
  */
-function splitDownloadTargets(targets, previous, onDisk) {
-  const fileByUrl = {};
+function splitDownloadTargets<T extends { url: string; file: string | null }>(
+  targets: T[],
+  previous: SampleImage[] | undefined,
+  onDisk: Set<string>,
+): { reuse: T[]; fetch: T[] } {
+  const fileByUrl: Record<string, string> = {};
   for (const image of (previous || [])) {
     if (image && image.url && image.file) fileByUrl[image.url] = image.file;
   }
 
-  const reuse = [];
-  const fetch = [];
+  const reuse: T[] = [];
+  const fetch: T[] = [];
   for (const target of targets) {
     if (fileByUrl[target.url] === target.file && onDisk.has(target.file)) reuse.push(target);
     else fetch.push(target);
@@ -75,7 +107,12 @@ function splitDownloadTargets(targets, previous, onDisk) {
  * @param {Number} [options.concurrency=1] Images to fetch at once.
  * @returns {Promise<Array<Object>>} The image list, each entry with `file` set or null.
  */
-async function downloadWorkImages(id, metadata, log = consoleLogger, options = {}) {
+async function downloadWorkImages(
+  id: string,
+  metadata: WorkImageMetadata,
+  log: WorkExtrasLogger = consoleLogger,
+  options: DownloadImagesOptions = {},
+): Promise<WorkImageTarget[]> {
   const { previous = [], concurrency = 1 } = options;
   const displayId = displayIdOf(id);
   const images = collectWorkImages(metadata);
@@ -86,8 +123,8 @@ async function downloadWorkImages(id, metadata, log = consoleLogger, options = {
   // rescanned still has no images/ directory.
   await fs.promises.mkdir(config.imageFolderDir, { recursive: true });
 
-  const counters = {};
-  const targets = images.map((image) => {
+  const counters: Record<string, number> = {};
+  const targets: TargetImage[] = images.map((image) => {
     counters[image.kind] = (counters[image.kind] || 0) + 1;
     const ext = (image.url.split('?')[0].split('.').pop() || 'jpg');
     return { ...image, file: workImageFileName(id, image.kind, counters[image.kind], ext) };
@@ -96,7 +133,7 @@ async function downloadWorkImages(id, metadata, log = consoleLogger, options = {
   // Images are ~1MB each and arrive one at a time, so refetching a work's whole
   // set is the bulk of what a refresh costs. Anything already on disk under the
   // name this run would give it is the same picture, and is kept.
-  const onDisk = new Set(await fs.promises.readdir(config.imageFolderDir).catch(() => []));
+  const onDisk = new Set<string>(await fs.promises.readdir(config.imageFolderDir).catch(() => []));
   const { reuse, fetch } = splitDownloadTargets(targets, previous, onDisk);
 
   if (!fetch.length) {
@@ -109,31 +146,31 @@ async function downloadWorkImages(id, metadata, log = consoleLogger, options = {
   const limit = new LimitPromise(Math.max(1, concurrency));
 
   let finished = 0;
-  const fetchOne = async (target) => {
+  const fetchOne = async (target: TargetImage): Promise<WorkImageTarget> => {
     const label = IMAGE_KIND_LABEL[target.kind] || target.kind;
     try {
-      const imageRes = await axios.retryGet(target.url, { responseType: 'stream', retry: {} });
+      const imageRes = await axios.retryGet<NodeJS.ReadableStream>(target.url, { responseType: 'stream', retry: {} });
       await saveWorkImageToDisk(imageRes.data, target.file);
       log.info(displayId, `${label} ${++finished}/${fetch.length} 下载完成: ${target.file}`);
       return target;
     } catch (err) {
-      log.warn(displayId, `${label} ${++finished}/${fetch.length} 下载失败: ${target.file} - ${err.message} (URL: ${target.url})`);
+      log.warn(displayId, `${label} ${++finished}/${fetch.length} 下载失败: ${target.file} - ${(err as Error).message} (URL: ${target.url})`);
       return { ...target, file: null };
     }
   };
 
-  const results = [...reuse, ...await Promise.all(fetch.map(target => limit.call(fetchOne, target)))];
+  const results: WorkImageTarget[] = [...reuse, ...await Promise.all(fetch.map(target => limit.call(fetchOne, target)))];
 
   if (fetch.length) {
-    const stored = kind => results.filter(image => image.file && image.kind === kind).length;
-    const wanted = kind => targets.filter(target => target.kind === kind).length;
+    const stored = (kind: string) => results.filter(image => image.file && image.kind === kind).length;
+    const wanted = (kind: string) => targets.filter(target => target.kind === kind).length;
     log.info(displayId, `Work image downloaded: sample ${stored('smp')}/${wanted('smp')}, `
       + `part ${stored('part')}/${wanted('part')}.`);
   }
 
   // Page order, not fetch order: the stored list doubles as the render order.
-  const byUrl = new Map(results.map(result => [result.url, result]));
-  const ordered = targets.map(target => byUrl.get(target.url) || { ...target, file: null });
+  const byUrl = new Map<string, WorkImageTarget>(results.map(result => [result.url, result]));
+  const ordered: WorkImageTarget[] = targets.map(target => byUrl.get(target.url) || { ...target, file: null });
 
   const pruned = await deleteWorkImagesFromDisk(id, new Set(targets.map(target => target.file)));
   if (pruned) log.info(displayId, `清理无用的作品图片 ${pruned} 张.`);
@@ -150,7 +187,12 @@ async function downloadWorkImages(id, metadata, log = consoleLogger, options = {
  * @param {Object} [options] Passed to downloadWorkImages (concurrency).
  * @returns {Promise<Number>} Number of images that reached disk.
  */
-async function saveWorkImages(id, metadata, log = consoleLogger, options = {}) {
+async function saveWorkImages(
+  id: string,
+  metadata: WorkImageMetadata,
+  log: WorkExtrasLogger = consoleLogger,
+  options: Omit<DownloadImagesOptions, 'previous'> = {},
+): Promise<number> {
   const displayId = displayIdOf(id);
   try {
     const stored = await db.getWorkExtras(id);
@@ -162,7 +204,7 @@ async function saveWorkImages(id, metadata, log = consoleLogger, options = {}) {
     await db.setWorkSampleImages(id, images);
     return images.filter(image => image.file).length;
   } catch (err) {
-    log.warn(displayId, `在保存作品图片过程中出错: ${err.message}`);
+    log.warn(displayId, `在保存作品图片过程中出错: ${(err as Error).message}`);
     return 0;
   }
 }
@@ -174,7 +216,7 @@ async function saveWorkImages(id, metadata, log = consoleLogger, options = {}) {
  * @param {Object} [log] Logger with info(id, message) / warn(id, message).
  * @returns {Promise<Number>} Number of reviews stored.
  */
-async function saveWorkReviews(id, log = consoleLogger) {
+async function saveWorkReviews(id: string, log: WorkExtrasLogger = consoleLogger): Promise<number> {
   if (isFanzaId(id)) return 0; // Fanza reviews are not scraped
 
   const rjcode = formatID(id);
@@ -185,7 +227,7 @@ async function saveWorkReviews(id, log = consoleLogger) {
     log.info(rjcode, `抓取到 ${reviews.length} 条 DLsite 用户评论.`);
     return reviews.length;
   } catch (err) {
-    log.warn(rjcode, `在抓取 DLsite 用户评论过程中出错: ${err.message}`);
+    log.warn(rjcode, `在抓取 DLsite 用户评论过程中出错: ${(err as Error).message}`);
     return 0;
   }
 }

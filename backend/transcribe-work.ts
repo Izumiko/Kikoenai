@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Transcribe a work's audio into subtitle sidecars. Orchestration only; the
  * HTTP client is asr.js. Same split as suggest-track-titles.js over
@@ -15,10 +14,49 @@ import path from 'path';
 import db from './database/db.ts';
 import { config } from './config.ts';
 import { listWorkTracks, indexWorkFiles, overlayDir } from './filesystem/workFiles.ts';
+import type { WorkFilesDb } from './filesystem/workFiles.ts';
 import { supportedMediaExtList } from './filesystem/utils.ts';
 import { findLyricTracks } from './routes/utils/lyrics.ts';
 import { WORK_ID_RE, normalizeWorkId } from './routes/utils/validate.ts';
 import { AsrError, isAsrConfigured, transcribe } from './asr.ts';
+import type { Track } from './types/track.ts';
+
+/** One progress line, one per track, as the transcribe dialog shows it. */
+export interface TranscribeProgress {
+  relPath: string;
+  status: 'running' | 'written' | 'skipped' | 'empty' | 'failed';
+  /** Set when the sidecar landed in the overlay instead of the work folder. */
+  overlay?: boolean;
+  /** Set on status 'failed'. */
+  error?: string;
+}
+
+/** What one run did, track by track. */
+export interface TranscribeTally {
+  written: number;
+  skipped: number;
+  failed: number;
+  empty: number;
+  /** How many of `written` went to the overlay. */
+  overlay: number;
+  cancelled: boolean;
+}
+
+/** Options of one run. */
+export interface TranscribeWorkOptions {
+  /** Called once per track; status is 'running', 'written', 'skipped', 'empty' or 'failed'. */
+  onProgress?: (progress: TranscribeProgress) => void;
+  /** Cancels between tracks and during one. */
+  signal?: AbortSignal;
+  /** relPaths to limit the run to, matched against the work's listing. Empty means all. */
+  only?: string[];
+  /** merged onto KIKO_ASR_QUERY for this run. */
+  query?: string;
+  /** Transcribe tracks that already have a subtitle. */
+  overwrite?: boolean;
+  /** Injected database, as in filesystem/workFiles.ts. */
+  dbApi?: WorkFilesDb;
+}
 
 // Wider than what the player renders, so a .txt from an earlier run still
 // counts as done (see asr.js on text/plain).
@@ -32,7 +70,7 @@ const UNWRITABLE = ['EROFS', 'EACCES', 'EPERM'];
  * Write `body` to `filePath` via a temp file and a rename, so a crash cannot
  * leave a truncated sidecar that the next listing reads as a good lyric file.
  */
-async function writeAtomic(filePath, body) {
+async function writeAtomic(filePath: string, body: string): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true });
   const temp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
@@ -45,7 +83,7 @@ async function writeAtomic(filePath, body) {
   }
 }
 
-const sidecarPath = (track, ext) => (
+const sidecarPath = (track: Track, ext: string): string => (
   [track.subtitle, `${track.title.replace(/\.[^.]+$/, '')}${ext}`].filter(Boolean).join('/')
 );
 
@@ -56,14 +94,16 @@ const sidecarPath = (track, ext) => (
  *
  * @returns {Promise<{relPath: String, overlay: Boolean}>}
  */
-async function writeSidecar(workId, workDir, track, ext, body) {
+async function writeSidecar(workId: string, workDir: string, track: Track, ext: string, body: string): Promise<{ relPath: string; overlay: boolean }> {
   const relPath = sidecarPath(track, ext);
 
   try {
     await writeAtomic(path.join(workDir, relPath), body);
     return { relPath, overlay: false };
   } catch (err) {
-    if (!UNWRITABLE.includes(err.code)) throw err;
+    // EROFS / EACCES / EPERM mean the folder cannot take the file; anything
+    // else is a real failure. The assertion only narrows the caught value.
+    if (!UNWRITABLE.includes((err as NodeJS.ErrnoException).code!)) throw err;
   }
 
   // A copy in the unwritable work folder would shadow whatever lands in the
@@ -91,7 +131,17 @@ async function writeSidecar(workId, workDir, track, ext, body) {
  * @returns {Promise<{written: Number, skipped: Number, failed: Number,
  *   empty: Number, overlay: Number, cancelled: Boolean}>}
  */
-async function transcribeWork(rawWorkId, { onProgress = () => {}, signal, only, query, overwrite = false, dbApi = db } = {}) {
+async function transcribeWork(
+  rawWorkId: unknown,
+  {
+    onProgress = () => {},
+    signal,
+    only,
+    query,
+    overwrite = false,
+    dbApi = db,
+  }: TranscribeWorkOptions = {},
+): Promise<TranscribeTally> {
   if (!isAsrConfigured()) {
     throw new AsrError('No transcription server is configured (KIKO_ASR_BASE_URL).');
   }
@@ -127,7 +177,7 @@ async function transcribeWork(rawWorkId, { onProgress = () => {}, signal, only, 
     throw new AsrError(`None of the selected tracks exist in work ${workId} any more. Reopen the dialog to refresh the list.`);
   }
 
-  const tally = { written: 0, skipped: 0, failed: 0, empty: 0, overlay: 0, cancelled: false };
+  const tally: TranscribeTally = { written: 0, skipped: 0, failed: 0, empty: 0, overlay: 0, cancelled: false };
   let wroteAnything = false;
 
   for (const track of audio) {
@@ -160,15 +210,16 @@ async function transcribeWork(rawWorkId, { onProgress = () => {}, signal, only, 
       if (overlay) tally.overlay += 1;
       onProgress({ relPath: track.shortFilePath, status: 'written', overlay });
     } catch (err) {
+      const error = err as Error;
       // A cancel unwinds as an AbortError: the user stopping, not a failure.
-      if (err.name === 'AbortError' || (signal && signal.aborted)) {
+      if (error.name === 'AbortError' || (signal && signal.aborted)) {
         tally.cancelled = true;
         break;
       }
       // An AsrError is for the admin; anything else is a bug worth a stack.
       if (!(err instanceof AsrError)) console.error(err);
       tally.failed += 1;
-      onProgress({ relPath: track.shortFilePath, status: 'failed', error: err.message });
+      onProgress({ relPath: track.shortFilePath, status: 'failed', error: error.message });
     }
   }
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // On disk log of scan runs, stored in config/logs
 
 import fs from 'fs';
@@ -9,8 +8,8 @@ import { dataRoot } from '../config.ts';
 const LOG_FOLDER_DIR = path.join(dataRoot, 'logs');
 const KEEP_RUNS = 10;
 
-let fd = null;
-let filePath = null;
+let fd: number | null = null;
+let filePath: string | null = null;
 
 // Sortable and filename-safe: 2026-09-14T08-30-00
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/:/g, '-');
@@ -19,7 +18,7 @@ const stamp = () => new Date().toISOString().slice(0, 19).replace(/:/g, '-');
  * Deletes all but the most recent KEEP_RUNS logs, so an install that scans
  * nightly does not accumulate them forever.
  */
-function pruneOldLogs() {
+function pruneOldLogs(): void {
   try {
     const logs = fs.readdirSync(LOG_FOLDER_DIR)
       .filter(name => /^scan-.*\.log$/.test(name))
@@ -35,7 +34,7 @@ function pruneOldLogs() {
  * @param {String} runName Short name of the run, e.g. 'scan' or 'files'.
  * @returns {String|null} The log's path, or null if it could not be opened.
  */
-function open(runName) {
+function open(runName: string): string | null {
   if (fd !== null) return filePath;
   try {
     fs.mkdirSync(LOG_FOLDER_DIR, { recursive: true });
@@ -44,7 +43,7 @@ function open(runName) {
     fd = fs.openSync(filePath, 'a');
   } catch (err) {
     // A read-only or missing data root must not stop the scan itself.
-    console.error(`Can't open log file: ${err.message}`);
+    console.error(`Can't open log file: ${(err as Error).message}`);
     fd = null;
     filePath = null;
   }
@@ -57,7 +56,7 @@ function open(runName) {
  * @param {String} message The message.
  * @param {String} [taskId] Work the message belongs to, if any.
  */
-function write(level, message, taskId) {
+function write(level: string, message: string, taskId?: string): void {
   if (fd === null) return;
   const prefix = taskId ? `[${taskId}] ` : '';
   try {
