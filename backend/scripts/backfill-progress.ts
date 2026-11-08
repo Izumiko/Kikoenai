@@ -33,7 +33,7 @@ import db from '../database/db.ts';
 import { config } from '../config.ts';
 import { listWorkTracks } from '../filesystem/workFiles.ts';
 import type { WorkFilesDb } from '../filesystem/workFiles.ts';
-import type { HistoryRow, TrackProgressRow, WorkRow } from '../types/db.ts';
+import type { HistoryRow, ReviewRow, TrackProgressRow, WorkRow } from '../types/db.ts';
 
 /** The slice of the database the backfill reads and writes. */
 type BackfillDb = WorkFilesDb & Pick<typeof db, 'updateUserReview' | 'upsertTrackProgress'>;
@@ -52,6 +52,29 @@ type WorkSelectRow = Pick<WorkRow, 'id' | 'root_folder' | 'dir'>;
 
 /** The columns the backfill reads from one per-track progress row. */
 type ProgressSelectRow = Pick<TrackProgressRow, 'user_name' | 'work_id' | 'track_key' | 'seconds' | 'completed'>;
+
+/** One queue item of the client's stored playback state. */
+interface PlaybackQueueItem {
+  /** `${workId}/${relPath}`, or the legacy `${workId}/${index}` / CRC32 handle. */
+  trackId?: string;
+  /** Legacy rows parked the old content-hash handle here. */
+  hash?: string;
+  title?: string;
+  duration?: number;
+}
+
+/**
+ * The client's stored playback state (`t_play_history.state`, JSON). Only the
+ * keys the backfill reads are declared.
+ */
+interface PlaybackState {
+  queue?: PlaybackQueueItem[];
+  index?: number;
+  seconds?: number;
+}
+
+/** The `t_review.progress` values that are already terminal. */
+const TERMINAL_PROGRESS: ReadonlyArray<string | null> = ['listened', 'replay', 'postponed'];
 
 /**
  * Run the backfill. Collects log lines instead of writing to stdout so the
@@ -107,17 +130,19 @@ async function runBackfill ({ dryRun = false, log = (m) => console.log(m), dbApi
     summary.total++;
     const { user_name: username, work_id: workId, state } = row;
 
-    let parsed;
+    let parsed: PlaybackState = {};
     try {
       parsed = JSON.parse(state);
     } catch {
       continue;
     }
-    const { queue, index } = parsed || {};
+    // A stored `null`/scalar parses but has no queue; treat it like a bad row.
+    const stateData: PlaybackState = parsed || {};
+    const { queue, index } = stateData;
     if (!Array.isArray(queue) || typeof index !== 'number') {
       continue;
     }
-    const currentTrack = queue[index];
+    const currentTrack: PlaybackQueueItem | undefined = queue[index];
 
     // Position of the parked track. Legacy rows carry state.seconds; current
     // ones keep it in t_track_progress, keyed by the track's relPath.
@@ -136,29 +161,31 @@ async function runBackfill ({ dryRun = false, log = (m) => console.log(m), dbApi
     }
 
     // --- Phase 1: mark listened ---
-    const existingReview = await dbApi.knex('t_review')
+    const existingReview: Pick<ReviewRow, 'progress'> | undefined = await dbApi.knex('t_review')
       .select('progress')
       .where('user_name', '=', username)
       .andWhere('work_id', '=', workId)
       .first();
-    if (existingReview && ['listened', 'replay', 'postponed'].includes(existingReview.progress)) {
+    if (existingReview && TERMINAL_PROGRESS.includes(existingReview.progress)) {
       summary.skippedTerminal++;
       // Still fall through to Phase 2 below
     }
 
     if (index === queue.length - 1) {
-      const lastTrack = queue[queue.length - 1];
+      const lastTrack: PlaybackQueueItem | undefined = queue[queue.length - 1];
       // The player already decides "finished" when it writes a progress row, so
       // its completed flag settles it on its own — the duration comparison is
       // the fallback for legacy rows, whose seconds is all we have.
       const completedFlag = !!(trackProgress && trackProgress.completed);
-      const hasDuration = !!(lastTrack && typeof lastTrack.duration === 'number' && lastTrack.duration > 0);
+      const lastDuration = lastTrack && typeof lastTrack.duration === 'number' ? lastTrack.duration : null;
+      const hasDuration = lastDuration !== null && lastDuration > 0;
       if (completedFlag || hasDuration) {
-        if (completedFlag || (seconds !== null && seconds >= 0.95 * lastTrack.duration)) {
-          if (!existingReview || !['listened', 'replay', 'postponed'].includes(existingReview.progress)) {
+        // lastDuration cannot be null here unless completedFlag already settled it.
+        if (completedFlag || (seconds !== null && lastDuration !== null && seconds >= 0.95 * lastDuration)) {
+          if (!existingReview || !TERMINAL_PROGRESS.includes(existingReview.progress)) {
             if (dryRun) {
               const position = seconds === null ? '?' : Math.round(seconds);
-              const total = hasDuration ? Math.round(lastTrack.duration) : '?';
+              const total = lastDuration === null || lastDuration <= 0 ? '?' : Math.round(lastDuration);
               log(`  [P1-DRY] ${username} / work ${workId} — last track "${lastTrack.title}" finished (${position}s / ${total}s)`);
             } else {
               try {
@@ -252,7 +279,7 @@ export { runBackfill };
  * the index is the source of truth, and reimplementing it risks drift.
  * Returns the relPath, or null.
  */
-async function resolveRelPath (workId: string, trackId: string, workDir: string | undefined, dbApi: BackfillDb): Promise<string | null> {
+async function resolveRelPath (workId: string, trackId: string | undefined, workDir: string | undefined, dbApi: BackfillDb): Promise<string | null> {
   if (!trackId) return null;
   const slash = trackId.indexOf('/');
   if (slash === -1) return null;

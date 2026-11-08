@@ -30,6 +30,7 @@ import { config } from '../config.ts';
 import { listWorkTracks } from '../filesystem/workFiles.ts';
 import type { WorkFilesDb } from '../filesystem/workFiles.ts';
 import type { TrackProgressRow, WorkRow } from '../types/db.ts';
+import type { Track } from '../types/track.ts';
 
 // A key the migration left behind: 8 lowercase hex digits. A relPath cannot look
 // like one, because a tracked file always carries an extension.
@@ -106,7 +107,7 @@ async function run ({ dryRun = false, purge = false, log = console.log, dbApi = 
     }
 
     const workDir = path.join(rootFolder.path, work.dir);
-    let tracks;
+    let tracks: Track[];
     try {
       tracks = await listWorkTracks(workId, workDir, { dbApi });
     } catch (err) {
@@ -140,7 +141,8 @@ async function run ({ dryRun = false, purge = false, log = console.log, dbApi = 
         recovered += 1;
         continue;
       }
-      const clash = await dbApi.knex('t_track_progress')
+      // Only its presence is read: a row on the target relPath would collide.
+      const clash: TrackProgressRow | undefined = await dbApi.knex('t_track_progress')
         .where({ user_name: row.user_name, work_id: workId, track_key: relPath })
         .first();
       const where = { user_name: row.user_name, work_id: workId, track_key: row.track_key };
