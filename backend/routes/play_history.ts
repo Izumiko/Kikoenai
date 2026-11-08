@@ -1,6 +1,5 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const router = express.Router();
 import { query, body } from 'express-validator';
 import { config } from '../config.ts';
@@ -10,19 +9,30 @@ import { isValidRequest, workIdParam } from './utils/validate.ts';
 
 const PAGE_SIZE = config.pageSize || 12;
 
+/**
+ * The GET / query string, each field checked by the chains below. A type alias
+ * rather than an interface so it keeps the implicit index signature Express's
+ * ParsedQs requires.
+ */
+type HistoryQuery = {
+  page?: string;
+  sort?: string;
+  excludeFinished?: string;
+};
+
 
 router.get('/',
   query('page').optional().isInt(),
   query('sort').optional().isIn(['desc', 'asc']),
   query('excludeFinished').optional().isIn(['all', 'listened']),
    
-  async (req, res, next) => {
+  async (req: Request<{}, unknown, unknown, HistoryQuery>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    const currentPage = parseInt(req.query.page) || 1;
+    const currentPage = parseInt(req.query.page as string) || 1;
     const sort = req.query.sort || 'desc';
     const offset = (currentPage - 1) * PAGE_SIZE;
-    const username = config.auth ? req.user.name : 'admin';
+    const username = config.auth ? req.user!.name : 'admin';
     const excludeFinished = req.query.excludeFinished || 'listened';
     
     try {
@@ -56,10 +66,10 @@ router.put('/:id',
   workIdParam(),
   body('state').isObject(),
    
-  (req, res, next) => {
+  (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    let username = config.auth ? req.user.name : 'admin';
+    let username = config.auth ? req.user!.name : 'admin';
 
     // console.log('update historoy =', username, req.body.work_id, req.body.state)
     // console.log(`config.auth = ${config.auth}`)
@@ -76,10 +86,10 @@ router.put('/:id',
 // 删除播放历史，适用于当前场景下，某些文件被删除后，作品只有一个文件，无法播放正确文件的bug
 router.delete('/:id',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    let username = config.auth ? req.user.name : 'admin';
+    let username = config.auth ? req.user!.name : 'admin';
     try {
       await db.deletePlayHistory(username, req.params.id);
       res.send({message: '删除历史记录成功'});

@@ -1217,8 +1217,11 @@ const makeQueries = (knex: Knex) => {
   /**
    * 更新用户密码
    * @param newPassword new password
+   *
+   * Only the name is read, so the caller need not hold the other columns --
+   * routes/credentials.ts passes `{ name }` from the request body.
    */
-  const updateUserPassword = (user: UserInput, newPassword: string) => knex.transaction(trx => trx('t_user')
+  const updateUserPassword = (user: Pick<UserInput, 'name'>, newPassword: string) => knex.transaction(trx => trx('t_user')
     .where('name', '=', user.name)
     .first()
     .then((res) => {
@@ -1235,7 +1238,7 @@ const makeQueries = (knex: Knex) => {
   /**
    * 重置用户密码为 "password"
    */
-  const resetUserPassword = (user: UserInput) => knex.transaction(trx => trx('t_user')
+  const resetUserPassword = (user: Pick<UserInput, 'name'>) => knex.transaction(trx => trx('t_user')
     .where('name', '=', user.name)
     .first()
     .then((res) => {
@@ -1252,7 +1255,7 @@ const makeQueries = (knex: Knex) => {
   /**
    * 删除用户
    */
-  const deleteUser = (users: UserInput[]) => knex.transaction(trx => trx('t_user')
+  const deleteUser = (users: Array<Pick<UserInput, 'name'>>) => knex.transaction(trx => trx('t_user')
     .where('name', 'in', users.map(user => user.name))
     .del());
 

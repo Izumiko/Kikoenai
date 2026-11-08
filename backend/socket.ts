@@ -1,15 +1,26 @@
-// @ts-nocheck
-
 import path from 'path';
 import { Server } from 'socket.io';
 import cookie from 'cookie';
 import child_process from 'child_process';
+import type { ChildProcess } from 'child_process';
+import type { Server as HttpServer } from 'http';
+import type { Server as HttpsServer } from 'https';
 import { config } from './config.ts';
 import { SESSION_COOKIE, getSession } from './auth/session.ts';
 import { suggestTrackTitles, SuggestError } from './suggest-track-titles.ts';
 import { transcribeWork, AsrError } from './transcribe-work.ts';
+import type { ScanCommand, ScanEvent } from './types/scan-events.ts';
 
-const initSocket = (server) => {
+/**
+ * The terminal scan event the parent replays to a page that (re)connects after
+ * the run has already ended: SCAN_FINISHED as the child sent it, or the
+ * SCAN_ERROR this file synthesises for a child that exited non-zero.
+ */
+type LastScanEvent =
+  | Extract<ScanEvent, { event: 'SCAN_FINISHED' }>
+  | { event: 'SCAN_ERROR'; payload: undefined };
+
+const initSocket = (server: HttpServer | HttpsServer) => {
   const io = new Server(server, { path: `${config.basePath}/socket.io` });
   if (config.auth) {
     io.use((socket, next) => {
@@ -40,10 +51,10 @@ const initSocket = (server) => {
     });
   }
 
-  let scanner = null;
-  let lastScanEvent = null;
+  let scanner: ChildProcess | null = null;
+  let lastScanEvent: LastScanEvent | null = null;
 
-  const startScanner = (script, args = []) => {
+  const startScanner = (script: string, args: string[] = []) => {
     if (scanner) return; // one at a time; see backend/AGENTS.md §3
 
     lastScanEvent = null;
@@ -62,7 +73,7 @@ const initSocket = (server) => {
       }
     });
 
-    scanner.on('message', (m) => {
+    scanner.on('message', (m: ScanEvent) => {
       if (m.event) {
         if (m.event === 'SCAN_FINISHED') lastScanEvent = { event: m.event, payload: m.payload };
         io.emit(m.event, m.payload);
@@ -89,7 +100,7 @@ const initSocket = (server) => {
         // Covers the user refreshing the page mid-scan
         scanner.send({
           emit: 'SCAN_INIT_STATE'
-        });
+        } satisfies ScanCommand);
       } else if (lastScanEvent) {
         socket.emit(lastScanEvent.event, lastScanEvent.payload);
       }
@@ -106,7 +117,7 @@ const initSocket = (server) => {
       // process -- a stale page clicking it used to throw on null and take the
       // whole server down with an unhandled 'error' event.
       if (scanner) {
-        scanner.send({ exit: 1 });
+        scanner.send({ exit: 1 } satisfies ScanCommand);
       } else {
         socket.emit('SCAN_FINISHED', { message: 'The scan process has ended.' });
       }
@@ -132,7 +143,7 @@ const initSocket = (server) => {
         // A SuggestError is a precondition the admin can act on. Anything else
         // is the model endpoint failing or a real bug, so it gets logged.
         if (!(err instanceof SuggestError)) console.error(err);
-        socket.emit('SUGGEST_TRACK_TITLES_ERROR', { workId, error: err.message });
+        socket.emit('SUGGEST_TRACK_TITLES_ERROR', { workId, error: (err as Error).message });
       }
     });
 
@@ -140,7 +151,7 @@ const initSocket = (server) => {
     // SUGGEST_TRACK_TITLES, with `workId` echoed so a dialog can ignore a
     // reply for a work it has moved off. One run per socket; the controller
     // doubles as the "already running" flag.
-    let transcribing = null;
+    let transcribing: AbortController | null = null;
 
     socket.on('TRANSCRIBE_WORK', async (payload) => {
       const workId = payload && payload.workId;
@@ -165,7 +176,7 @@ const initSocket = (server) => {
         socket.emit('TRANSCRIBE_RESULT', { workId, ...result });
       } catch (err) {
         if (!(err instanceof AsrError)) console.error(err);
-        socket.emit('TRANSCRIBE_ERROR', { workId, error: err.message });
+        socket.emit('TRANSCRIBE_ERROR', { workId, error: (err as Error).message });
       } finally {
         transcribing = null;
       }

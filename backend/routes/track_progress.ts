@@ -1,6 +1,5 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const router = express.Router();
 import { body } from 'express-validator';
 import { config } from '../config.ts';
@@ -14,10 +13,10 @@ router.put('/:id/*path',
   body('seconds').isFloat({ min: 0 }),
   body('completed').isBoolean(),
   body('observedAt').optional().isInt({ min: 0 }),
-  async (req, res, next) => {
+  async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    const username = config.auth ? req.user.name : 'admin';
+    const username = config.auth ? req.user!.name : 'admin';
     try {
       const resolved = await resolveTrack(req, res);
       if (!resolved) return;

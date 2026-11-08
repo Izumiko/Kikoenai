@@ -1,6 +1,5 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const router = express.Router();
 import { check, validationResult } from 'express-validator'; // 后端校验
 import { md5 } from '../auth/utils.ts';
@@ -24,7 +23,7 @@ router.post('/users', [
       }
       return true;
     })
-], (req, res, next) => {
+], (req: Request, res: Response, next: NextFunction) => {
   // Finds the validation errors in this request and wraps them in an object with handy functions
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -37,7 +36,7 @@ router.post('/users', [
     group: req.body.group
   };
 
-  if (!config.auth || req.user.name === 'admin') {
+  if (!config.auth || req.user!.name === 'admin') {
     db.createUser({
       name: user.name,
       password: md5(user.password),
@@ -64,7 +63,7 @@ router.put('/users', [
   check('newPassword')
     .isLength({ min: 5 })
     .withMessage('密码长度至少为 5')
-], (req, res, next) => {
+], (req: Request, res: Response, next: NextFunction) => {
   // Finds the validation errors in this request and wraps them in an object with handy functions
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -76,7 +75,7 @@ router.put('/users', [
   };
   const newPassword = md5(req.body.newPassword);
 
-  if (!config.auth || req.user.name === 'admin' || req.user.name === user.name) {
+  if (!config.auth || req.user!.name === 'admin' || req.user!.name === user.name) {
     db.updateUserPassword(user, newPassword)
       // A password change revokes every session for that user, including this one
       .then(() => destroyUserSessions(user.name))
@@ -94,11 +93,11 @@ router.put('/users', [
 });
 
 // 删除用户 (仅 admin 账号拥有权限)
-router.delete('/users', (req, res, next) => {
+router.delete('/users', (req: Request, res: Response, next: NextFunction) => {
   const users = req.body.users;
 
-  if (!config.auth || req.user.name === 'admin') {
-    if (!users.find(user => user.name === 'admin')) {
+  if (!config.auth || req.user!.name === 'admin') {
+    if (!users.find((user: { name: string }) => user.name === 'admin')) {
       db.deleteUser(users)
         .then(() => {
           res.send({ message: '删除成功.' });  
@@ -115,8 +114,8 @@ router.delete('/users', (req, res, next) => {
 });
 
 // 获取所有用户
-router.get('/users', (req, res, next) => {
-  if (!config.auth || req.user.name === 'admin') {
+router.get('/users', (req: Request, res: Response, next: NextFunction) => {
+  if (!config.auth || req.user!.name === 'admin') {
     db.knex('t_user')
     .select('name', 'group')
     .then((users) => {

@@ -38,9 +38,26 @@ interface NormalizeOptions {
   dateOnly?: boolean;
 }
 
+/**
+ * The columns a row must carry to be normalized.
+ *
+ * `id` and `nsfw` are the two every listing row has and every caller relies on;
+ * declaring the minimum here, rather than taking `WorkListRow`, is what lets a
+ * caller hand in the database layer's assembled row type. An interface never
+ * gains the implicit index signature `WorkListRow` requires, so a parameter
+ * typed as that would reject the very rows it exists to normalize.
+ */
+type NormalizeInput = {
+  id: string;
+  nsfw: WorkListRow['nsfw'];
+};
+
 // Normalize API endpoints
-const normalize = (works: WorkListRow[], options: NormalizeOptions = {}): WorkListRow[] => {
-  works.map(record => {
+const normalize = <T extends NormalizeInput>(works: T[], options: NormalizeOptions = {}): T[] => {
+  works.map((row) => {
+    // Every column below is addressed by name, and the *Obj columns are deleted
+    // once unpacked -- hence WorkListRow, the string-keyed view of the row.
+    const record = row as unknown as WorkListRow;
     record.nsfw = Boolean(record.nsfw);
     // Both are always supplied by assembleWorks (and by both upstream schemas).
     record.circle = JSON.parse(record.circleObj!);

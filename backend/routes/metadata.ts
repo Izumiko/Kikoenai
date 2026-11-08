@@ -1,7 +1,6 @@
-// @ts-nocheck
-
 import path from 'path';
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const router = express.Router();
 import { param, query, body } from 'express-validator';
 import db from '../database/db.ts';
@@ -23,15 +22,34 @@ const COVER_FALLBACK_MAX_AGE = 5 * 60;   // 5 minutes
 const IMAGE_MAX_AGE = COVER_MAX_AGE; // same for other images in the work page
 
 const PAGE_SIZE = config.pageSize || 12;
-const FIELDS = ['circle', 'tag', 'va', 'illustrator', 'script_writer', 'series'];
+// `as const` so the loops below know which label tables a handler can be
+// registered for; it is the same array at runtime.
+const FIELDS = ['circle', 'tag', 'va', 'illustrator', 'script_writer', 'series'] as const;
+
+/** The label tables the list/detail routes exist for. */
+type Field = typeof FIELDS[number];
+
+/** The GET /works query string, as the chains below check it. */
+type WorksQuery = {
+  page?: string;
+  order?: string;
+  sort?: string;
+  nsfw?: string;
+  seed?: string;
+};
+
+/** GET /search takes the same fields plus the filter box, unvalidated. */
+type SearchQuery = WorksQuery & {
+  filter?: string;
+};
 
 // avoid 'seriess'
-const ROUTE_SEGMENT = (field) => (field === 'series' ? 'series' : `${field}s`);
+const ROUTE_SEGMENT = (field: Field) => (field === 'series' ? 'series' : `${field}s`);
 
 // GET work cover image
 router.get('/cover/:id',
   workIdParam(),
-  (req, res, next) => {
+  (req: Request<{ id: string }, unknown, unknown, { type?: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     const workId = req.params.id;
@@ -58,12 +76,12 @@ router.get('/cover/:id',
 // GET work metadata
 router.get('/work/:id',
   workIdParam(),
-  (req, res, next) => {
+  (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     let username = 'admin';
     if (config.auth) {
-      username = req.user.name;
+      username = req.user!.name;
     }
     db.getWorkMetadata(req.params.id, username)
       .then(work => {
@@ -79,7 +97,7 @@ router.get('/work/:id',
 // embedded images, track list) and the sample image list.
 router.get('/work/:id/extras',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     try {
@@ -105,7 +123,7 @@ router.get('/work/:id/extras',
 // GET one scraped sample/description image.
 router.get('/image/:id/:name',
   workIdParam(),
-  (req, res, next) => {
+  (req: Request<{ id: string; name: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     const { id, name } = req.params;
@@ -125,7 +143,7 @@ router.get('/image/:id/:name',
 // GET track list in work folder
 router.get('/tracks/:id',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
     const work_id = req.params.id;
 
@@ -148,7 +166,7 @@ router.get('/tracks/:id',
           const tracks = await listWorkTracks(work_id, workDir, { indexedAt: work.files_indexed_at });
           const tree = toTree(tracks, work.title, work.dir, rootFolder);
           // Bundle per-track progress for the requesting user
-          const username = config.auth ? req.user.name : 'admin';
+          const username = config.auth ? req.user!.name : 'admin';
           const trackProgress = await db.getTrackProgress(username, work_id);
           res.send({ tree, trackProgress });
         } catch (err) {
@@ -171,22 +189,24 @@ router.get('/works',
   query('nsfw').optional().isInt().isIn([0/* 无年龄限制 */, 1 /* 全年龄 */, 2 /* 仅R18 */]),
   query('seed').optional().isInt(),
    
-  async (req, res, next) => {
+  async (req: Request<{}, unknown, unknown, WorksQuery>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    const currentPage = parseInt(req.query.page) || 1;
+    const currentPage = parseInt(req.query.page as string) || 1;
     // 通过 "音声id, 贩卖日, 评价, 用户评价, 售出数, 评论数量, 价格, 平均评价, 全年龄新作， 入库时间， 随机， 随机一个" 排序
     // ['id', 'release', 'rating', 'dl_count', 'review_count', 'price', 'rate_average_2dp', 'nsfw', 'created_at']
     const order = req.query.order || 'release';
     const sort = req.query.sort || 'desc';
     const nsfw = parseInt(req.query.nsfw || '0');
     const offset = (currentPage - 1) * PAGE_SIZE;
-    const username = config.auth ? req.user.name : 'admin';
+    const username = config.auth ? req.user!.name : 'admin';
+    // express-validator checked this is an integer; a query value arrives as a
+    // string and the db layer takes the raw seed.
     const shuffleSeed = req.query.seed ? req.query.seed : 7;
 
     try {
       const { works, totalCount } = await db.getWorksBy({
-        username, nsfw, order, sort, limit: PAGE_SIZE, offset, seed: shuffleSeed
+        username, nsfw, order, sort, limit: PAGE_SIZE, offset, seed: shuffleSeed as number
       });
       normalize(works);
     
@@ -208,7 +228,7 @@ router.get('/works',
 // GET name of a circle/tag/VA/illustrator/script_writer/series
 for (const field of FIELDS) {
   router.get(`/${ROUTE_SEGMENT(field)}/:id`,
-    (req, res, next) => {
+    (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
       if(!isValidRequest(req, res)) return;
 
       return db.getMetadata({field, id: req.params.id})
@@ -216,7 +236,7 @@ for (const field of FIELDS) {
           if (item) {
             res.send(item); 
           } else {
-            const errorMessage= {
+            const errorMessage: Record<Field, string> = {
               'circle': `社团${req.params.id}不存在`,
               'tag': `标签${req.params.id}不存在`,
               'va': `声优${req.params.id}不存在`,
@@ -232,22 +252,24 @@ for (const field of FIELDS) {
 }
 
  
-router.get('/search', async (req, res, next) => {
+router.get('/search', async (req: Request<{}, unknown, unknown, SearchQuery>, res: Response, next: NextFunction) => {
   const filter = req.query.filter ? req.query.filter.trim() : '';
 
-  const currentPage = parseInt(req.query.page) || 1;
+  const currentPage = parseInt(req.query.page as string) || 1;
   // 通过 "贩卖日, 用户评价, 全年龄新作" 排序
   // ['release', 'rating', 'nsfw']
   const order = req.query.order || 'release';
   const sort = req.query.sort || 'desc';
   const nsfw = parseInt(req.query.nsfw || '0'); 
   const offset = (currentPage - 1) * PAGE_SIZE;
-  const username = config.auth ? req.user.name : 'admin';
+  const username = config.auth ? req.user!.name : 'admin';
+  // express-validator checked this is an integer; a query value arrives as a
+  // string and the db layer takes the raw seed.
   const shuffleSeed = req.query.seed ? req.query.seed : 7;
   
   try {
     const { works, totalCount } = await db.getWorksByFilter({
-      filter, username, nsfw, order, sort, limit: PAGE_SIZE, offset, seed: shuffleSeed
+      filter, username, nsfw, order, sort, limit: PAGE_SIZE, offset, seed: shuffleSeed as number
     });
     normalize(works);
 
@@ -269,10 +291,11 @@ router.get('/search', async (req, res, next) => {
 // GET list of circles/tags/VAs/illustrators/script_writers/series
 for (const field of FIELDS) {
   router.get(`/${ROUTE_SEGMENT(field)}/`,
-    (req, res, next) => {
+    (req: Request, res: Response, next: NextFunction) => {
       if(!isValidRequest(req, res)) return;
 
-      db.getLabels(field)
+      // FIELDS is exactly the set of tables getLabels supports.
+      db.getLabels(field)!
         .orderBy(`name`, 'asc')
         .then(list => res.send(list))
         .catch(err => next(err));
@@ -291,11 +314,11 @@ router.put('/work/:id',
   body('illustrators').isArray(),
   body('scriptWriters').isArray(),
   body('series').optional(),
-  async (req, res) => {
+  async (req: Request<{ id: string }>, res: Response) => {
     if (!isValidRequest(req, res)) return;
 
     // Admin gate
-    if (config.auth && req.user.name !== 'admin') {
+    if (config.auth && req.user!.name !== 'admin') {
       return res.status(403).send({ error: '只有 admin 账号能编辑作品元数据.' });
     }
 
@@ -303,10 +326,12 @@ router.put('/work/:id',
 
     try {
       // Normalize input: coerce list elements to {id, name}, skip empty names, trim, deduplicate by name
-      const normalizeList = (items) => {
-        const seen = new Set();
+      const normalizeList = (items: Array<string | { name?: string }>): Array<{ id?: string | number; name: string }> => {
+        const seen = new Set<string>();
         return items
-          .map(item => (typeof item === 'string' ? { name: item.trim() } : { name: (item.name || '').trim() }))
+          // The `id` the last map reads is only ever present on an object the
+          // caller sent; a name coming in as a bare string keeps its undefined.
+          .map((item): { id?: string | number; name: string } => (typeof item === 'string' ? { name: item.trim() } : { name: (item.name || '').trim() }))
           .filter(item => item.name !== '' && !seen.has(item.name) && seen.add(item.name))
           .map(item => ({ id: item.id, name: item.name }));
       };
@@ -328,7 +353,7 @@ router.put('/work/:id',
       await db.editWorkMetadata(workId, data);
 
       // Re-fetch and return updated metadata
-      const username = config.auth ? req.user.name : 'admin';
+      const username = config.auth ? req.user!.name : 'admin';
       const work = await db.getWorkMetadata(workId, username);
       normalize(work);
       res.send({ message: '元数据更新成功', metadata: work[0] });
@@ -362,14 +387,14 @@ const EDITABLE_FILE_FIELDS = ['trackTitle'];
 router.put('/work/:id/file-metadata',
   workIdParam(),
   body('files').isObject(),
-  async (req, res) => {
+  async (req: Request<{ id: string }>, res: Response) => {
     if (!isValidRequest(req, res)) return;
 
-    if (config.auth && req.user.name !== 'admin') {
+    if (config.auth && req.user!.name !== 'admin') {
       return res.status(403).send({ error: '只有 admin 账号能编辑文件信息.' });
     }
 
-    const titles = {};
+    const titles: Record<string, string | null> = {};
     for (const [relPath, fields] of Object.entries(req.body.files)) {
       if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
         return res.status(400).send({ error: `${relPath} 的字段必须是对象` });
@@ -404,7 +429,7 @@ router.put('/work/:id/file-metadata',
 // 刷新单个作品文件夹中的文件信息记录，例如音频文件发生变动后，通过这个请求重新扫描音频文件时长
 router.post('/scan/:id',
   workIdParam(),
-  async function(req, res) {
+  async function(req: Request<{ id: string }>, res: Response) {
     if(!isValidRequest(req, res)) return;
 
     const work_id = req.params.id;
@@ -428,7 +453,7 @@ router.post('/scan/:id',
       res.send({ files: tracks.length });
     } catch (err) {
       console.error(err);
-      res.status(500).send({error: "扫描作品文件失败：" + err.message});
+      res.status(500).send({error: "扫描作品文件失败：" + (err as Error).message});
     }
   } 
 );
@@ -436,7 +461,7 @@ router.post('/scan/:id',
 // refresh metadata of a work from DLsite or Fanza, and update the database.
 router.post('/refresh/:id',
   workIdParam(),
-  async function(req, res) {
+  async function(req: Request<{ id: string }>, res: Response) {
     if(!isValidRequest(req, res)) return;
 
     const work_id = req.params.id;
@@ -467,7 +492,7 @@ router.post('/refresh/:id',
       });
     } catch (err) {
       console.error(err);
-      res.status(500).send({error: "Failed to refresh metadata for work " + work_id + ": " + err.message});
+      res.status(500).send({error: "Failed to refresh metadata for work " + work_id + ": " + (err as Error).message});
     }
   }
 );

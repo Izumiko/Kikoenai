@@ -1,9 +1,15 @@
-// @ts-nocheck
+import type { IRouter, NextFunction, Request, Response } from 'express';
 
 import routes from './routes/index.ts';
 
 import { config } from './config.ts';
 import { getSession, getSessionSecret } from './auth/session.ts';
+
+/** One of the routes the API serves without a session. */
+interface PublicRoute {
+  method: string;
+  path: string;
+}
 
 // Routes reachable without a session.
 //
@@ -13,17 +19,17 @@ import { getSession, getSessionSecret } from './auth/session.ts';
 //
 // The method matters: POST /auth/me is the login endpoint and must be public,
 // while GET /auth/me returns the current user and must not be.
-const PUBLIC_ROUTES = [
+const PUBLIC_ROUTES: PublicRoute[] = [
   { method: 'POST', path: '/auth/me' }, // login
   { method: 'GET', path: '/health' },
 ];
 
-const isPublic = (req) => PUBLIC_ROUTES.some(
+const isPublic = (req: Request): boolean => PUBLIC_ROUTES.some(
   (route) => route.method === req.method && route.path === req.path
 );
 
 // The error handler in app.js keys off err.name to return a 401
-const unauthorized = (message) => {
+const unauthorized = (message: string) => {
   const err = new Error(message);
   err.name = 'UnauthorizedError';
   return err;
@@ -31,7 +37,7 @@ const unauthorized = (message) => {
 
 // Validate the session, then attach { name, group } to req.user
 // (same shape the old JWT middleware produced, so no route needs changing)
-const authenticate = async (req, res, next) => {
+const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   if (isPublic(req)) {
     return next();
   }
@@ -65,12 +71,12 @@ const authenticate = async (req, res, next) => {
  *
  * Routes wanting real caching (e.g. covers) override this with res.setHeader.
  */
-const apiCacheDefaults = (req, res, next) => {
+const apiCacheDefaults = (req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'private, no-cache');
   next();
 };
 
-export default (app) => {
+export default (app: IRouter) => {
   // Mounted before auth so 401 responses carry the header too
   app.use('/api', apiCacheDefaults);
 

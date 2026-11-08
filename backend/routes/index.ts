@@ -1,10 +1,9 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { Request, Response } from 'express';
 const router = express.Router();
 
 // Health check endpoint
-router.get('/health', (req, res) => {
+router.get('/health', (req: Request, res: Response) => {
   res.send('OK');
 });
 

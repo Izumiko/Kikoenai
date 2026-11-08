@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// @ts-nocheck
 // Side-effect import: .env must be loaded before config.ts reads process.env,
 // and ESM evaluates imports in source order. See lib/load-env.ts.
 import './lib/load-env.ts';
 import path from 'path';
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
+import type { AddressInfo } from 'net';
 
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import history from 'connect-history-api-fallback';
+import type { Context as HistoryContext } from 'connect-history-api-fallback';
 import http from 'http';
 import https from 'https';
 import fs from 'fs';
@@ -78,7 +80,7 @@ app.use(cookieParser());
 // opt-in via config.allowedHosts (empty by default) so an upgrade never locks
 // out an existing public hostname nobody has listed yet.
 const PRIVATE_HOSTNAME_RE = /^(localhost|127\.\d+\.\d+\.\d+|::1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|f[cd][0-9a-f]{2}:|fe80:)/i;
-const isTrustedHost = (hostHeader) => {
+const isTrustedHost = (hostHeader: string | undefined): boolean => {
   if (!hostHeader) return false;
   // Strip the port; IPv6 literals arrive as "[::1]:8888".
   const hostname = hostHeader.startsWith('[')
@@ -86,7 +88,7 @@ const isTrustedHost = (hostHeader) => {
     : hostHeader.split(':')[0];
   return PRIVATE_HOSTNAME_RE.test(hostname) || config.allowedHosts.includes(hostname);
 };
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   if (config.allowedHosts.length === 0 || isTrustedHost(req.headers.host)) {
     return next();
   }
@@ -123,7 +125,7 @@ app.use((req, res, next) => {
 // (CSRF) using the victim's real session cookie. Only grant it when Origin
 // is genuinely this same host, so a real cross-origin request still falls
 // through to the default-deny behavior below (no CORS headers at all).
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.method === 'OPTIONS' && req.headers['access-control-request-private-network']) {
     const origin = req.headers.origin;
     const host = req.headers.host;
@@ -167,7 +169,8 @@ site.use(history({
   rewrites: [
     {
       from: /^\/api\/.*$/,
-      to: context => context.parsedUrl.path
+      // Every /api/ request has a path; the rewrite hands it back untouched.
+      to: (context: HistoryContext) => context.parsedUrl.path!
     }
   ]
 }));
@@ -175,7 +178,7 @@ site.use(history({
 // send them back as. Everything else in dist/ is prefix-agnostic and goes
 // straight through express.static.
 const DIST_DIR = path.join(import.meta.dirname, './dist');
-const PREFIXED_ASSETS = {
+const PREFIXED_ASSETS: Record<string, string> = {
   '/index.html': 'text/html; charset=utf-8',
   '/sw.js': 'text/javascript; charset=utf-8',
   '/manifest.json': 'application/manifest+json; charset=utf-8',
@@ -183,7 +186,7 @@ const PREFIXED_ASSETS = {
 
 // The rewrite is the same on every request, so do it once. Skipped outside
 // production so a rebuilt dist/ shows up without restarting the server.
-const prefixedAssetCache = new Map();
+const prefixedAssetCache = new Map<string, string>();
 
 /**
  * Tell the frontend where it is being served from.
@@ -194,18 +197,18 @@ const prefixedAssetCache = new Map();
  * instead. It is absent under `quasar dev`, where the app is always at the
  * root, and src/base-path.js falls back to '' accordingly.
  */
-const injectBaseGlobal = (html, basePath) => html.replace(
+const injectBaseGlobal = (html: string, basePath: string): string => html.replace(
   /<head(\s[^>]*)?>/i,
   (headTag) => `${headTag}<script>window.__KIKO_BASE__=${JSON.stringify(basePath)}</script>`
 );
 
-const buildPrefixedAsset = (assetPath) => {
+const buildPrefixedAsset = (assetPath: string): string => {
   const raw = fs.readFileSync(path.join(DIST_DIR, assetPath), 'utf-8');
   const rewritten = applyBasePath(raw, config.basePath);
   return assetPath === '/index.html' ? injectBaseGlobal(rewritten, config.basePath) : rewritten;
 };
 
-const servePrefixedAssets = (req, res, next) => {
+const servePrefixedAssets = (req: Request, res: Response, next: NextFunction) => {
   // `history` above has already rewritten WebApp routes to /index.html, so a
   // GET usually arrives here as the real file name. A bare '/' still has to be
   // handled: connect-history-api-fallback only rewrites GETs, and it declines
@@ -236,7 +239,7 @@ const servePrefixedAssets = (req, res, next) => {
   } catch (err) {
     // No frontend build in dist/ -- let express.static produce the 404 it
     // always did rather than turning a missing build into a 500.
-    if (err.code === 'ENOENT') return next();
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return next();
     next(err);
   }
 };
@@ -264,7 +267,7 @@ app.use(config.basePath || '/', site);
 
 // 返回错误响应
  
-app.use((err, req, res, next) => {
+app.use((err: Error & { code?: string }, req: Request, res: Response, next: NextFunction) => {
   if (err.name === 'UnauthorizedError') { 
     // 验证错误
     res.set("WWW-Authenticate", "Bearer realm=\"Authorization Required\"");
@@ -290,7 +293,7 @@ const server = http.createServer(app);
 server.keepAliveTimeout = 300000;
 server.headersTimeout = 300500;
 
-let httpsServer = null;
+let httpsServer: https.Server | null = null;
 let httpsSuccess = false;
 if (config.httpsEnabled) {
   try {
@@ -310,24 +313,34 @@ if (config.httpsEnabled) {
 // websocket 握手依赖 http 服务
 initSocket(server);
 if (config.httpsEnabled) {
-  initSocket(httpsServer);
+  // Null only when the certificate could not be read. socket.io treats a null
+  // server as "do not attach" (see its Server constructor), so this stays the
+  // no-op it always was.
+  initSocket(httpsServer!);
 }
 
-const listenPort = process.env.PORT || config.listenPort || 6789;
+// PORT comes in as a string; net.Server.listen coerces a numeric string, which
+// is what the untyped code relied on.
+const listenPort = (process.env.PORT || config.listenPort || 6789) as number;
 const localOnly = config.blockRemoteConnection;
 
 // Note: for some unknown reasons, :: does not always work 
 localOnly ? server.listen(listenPort, 'localhost') : server.listen(listenPort);
 if (config.httpsEnabled && httpsSuccess) {
-  localOnly ? httpsServer.listen(config.httpsPort, 'localhost') : httpsServer.listen(config.httpsPort);
+  // httpsSuccess is only ever set together with httpsServer.
+  localOnly ? httpsServer!.listen(config.httpsPort, 'localhost') : httpsServer!.listen(config.httpsPort);
 }
 
 server.on('listening', () => {
-  console.log('Express server started on port %s at %s', server.address().port, server.address().address);
+  // 'listening' has fired, so the address is an AddressInfo (never the IPC
+  // path string); narrowing it once is what lets the log read its fields.
+  const address = server.address() as AddressInfo;
+  console.log('Express server started on port %s at %s', address.port, address.address);
 });
 
 if (config.httpsEnabled && httpsSuccess) {
-  httpsServer.on('listening', () => {
-    console.log('Express server started on port %s at %s', httpsServer.address().port, httpsServer.address().address);
+  httpsServer!.on('listening', () => {
+    const address = httpsServer!.address() as AddressInfo;
+    console.log('Express server started on port %s at %s', address.port, address.address);
   });
 }

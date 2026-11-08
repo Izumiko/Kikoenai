@@ -1,6 +1,5 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const router = express.Router();
 import { config } from '../config.ts';
 import fs from 'fs';
@@ -11,8 +10,19 @@ import { joinFragments } from './utils/url.ts';
 import { isValidRequest, workIdParam } from './utils/validate.ts';
 import { findLyricTracks } from './utils/lyrics.ts';
 import { resolveTrack } from './utils/track.ts';
+import type { RootFolder } from '../types/config.ts';
+import type { Track } from '../types/track.ts';
 
-const offloadUrlFor = (basePath, rootFolder, work, track) => {
+/**
+ * What a media request resolves to. A media route's `*path` arrives as an array
+ * of already-decoded segments (Express 5), hence the two params.
+ */
+type MediaRequest = Request<{ id: string; path: string[] }>;
+
+/** The resolved work, track and folders a stream needs (see routes/utils/track.ts). */
+type ResolvedTrack = NonNullable<Awaited<ReturnType<typeof resolveTrack>>>;
+
+const offloadUrlFor = (basePath: string, rootFolder: RootFolder, work: { dir: string }, track: Track) => {
   const url = joinFragments(basePath, rootFolder.name, work.dir, track.subtitle || '', track.title);
   return process.platform === 'win32' ? url.replace(/\\/g, '/') : url;
 };
@@ -23,7 +33,7 @@ const TEXT_EXT_LIST = ['.txt', '.lrc', '.srt', '.ass', '.vtt'];
 // GET (stream) a specific track from work folder
 router.get('/stream/:id/*path',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: MediaRequest, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     try {
@@ -57,7 +67,7 @@ router.get('/stream/:id/*path',
 
 router.get('/download/:id/*path',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: MediaRequest, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     try {
@@ -79,7 +89,7 @@ router.get('/download/:id/*path',
 // GET the best offline-friendly copy of a track
 router.get('/offline/:id/*path',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: MediaRequest, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     try {
@@ -128,11 +138,13 @@ router.get('/offline/:id/*path',
 
 router.get('/check-lrc/:id/*path',
   workIdParam(),
-  async (req, res, next) => {
+  async (req: MediaRequest, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
     try {
-      const { tracks, track } = await resolveTrack(req, res) || {};
+      // `|| {}` is the not-found case, where resolveTrack has already sent the
+      // 404: the guard below returns without reading either field.
+      const { tracks, track } = await resolveTrack(req, res) || {} as ResolvedTrack;
       if (!track) return;
 
       const lyrics = findLyricTracks(track, tracks);

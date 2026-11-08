@@ -1,6 +1,5 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const router = express.Router();
 import { query, body } from 'express-validator';
 import { config } from '../config.ts';
@@ -10,6 +9,19 @@ import { isValidRequest, workIdParam } from './utils/validate.ts';
 
 const PAGE_SIZE = config.pageSize || 12;
 
+/**
+ * The GET / query string, as the chains below check it. A type alias rather
+ * than an interface so it keeps the implicit index signature Express's
+ * ParsedQs requires.
+ */
+type ReviewQuery = {
+  page?: string;
+  order?: string;
+  sort?: string;
+  seed?: string;
+  filter?: string;
+};
+
 
 router.get('/',
   query('page').optional().isInt(),
@@ -17,16 +29,16 @@ router.get('/',
   query('seed').optional().isInt(),
   query('filter').optional().isIn(['marked', 'listening', 'listened', 'replay', 'postponed']),
    
-  async (req, res, next) => {
+  async (req: Request<{}, unknown, unknown, ReviewQuery>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    const currentPage = parseInt(req.query.page) || 1;
+    const currentPage = parseInt(req.query.page as string) || 1;
     // 通过 "音声id, 贩卖日, 评价, 用户评价, 售出数, 评论数量, 价格, 平均评价, 全年龄新作" 排序
     // ['id', 'release', 'rating', 'dl_count', 'review_count', 'price', 'rate_average_2dp, nsfw']
     const order = req.query.order || 'release';
     const sort = req.query.sort || 'desc';
     const offset = (currentPage - 1) * PAGE_SIZE;
-    const username = config.auth ? req.user.name : 'admin';
+    const username = config.auth ? req.user!.name : 'admin';
     const filter = req.query.filter;
     
     try {
@@ -57,10 +69,10 @@ router.put('/:id',
   body('progressOnly').optional().isBoolean(),
   query('autoMark').optional().isBoolean(),
    
-  (req, res, next) => {
+  (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    let username = config.auth ? req.user.name : 'admin';
+    let username = config.auth ? req.user!.name : 'admin';
     let starOnly = true;
     let progressOnly = false;
     let autoMark = false;
@@ -90,10 +102,10 @@ router.put('/:id',
 // 删除用户标记
 router.delete('/:id',
   workIdParam(),
-  (req, res, next) => {
+  (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    let username = config.auth ? req.user.name : 'admin';
+    let username = config.auth ? req.user!.name : 'admin';
     db.deleteUserReview(username, req.params.id)
       .then(() => {
         res.send({message: '删除标记成功'});
@@ -103,10 +115,10 @@ router.delete('/:id',
 // 只清除进度，保留评分与评论
 router.delete('/:id/progress',
   workIdParam(),
-  (req, res, next) => {
+  (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     if(!isValidRequest(req, res)) return;
 
-    let username = config.auth ? req.user.name : 'admin';
+    let username = config.auth ? req.user!.name : 'admin';
     db.resetUserProgress(username, req.params.id)
       .then(() => {
         res.send({message: '清除进度成功'});

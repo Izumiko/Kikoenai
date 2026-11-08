@@ -1,11 +1,11 @@
-// @ts-nocheck
-
 import express from 'express';
+import type { Request, Response } from 'express';
 import { check, validationResult } from 'express-validator'; // 后端校验
 
 import { md5 } from '../auth/utils.ts';
 import { SESSION_COOKIE, getSessionSecret, sessionCookieOptions, createSession, destroySession } from '../auth/session.ts';
 import db from '../database/db.ts';
+import type { UserRow } from '../types/db.ts';
 
 import { config } from '../config.ts';
 
@@ -19,18 +19,19 @@ router.post('/me', [
   check('password')
     .isLength({ min: 5 })
     .withMessage('密码长度至少为 5')
-], async (req, res) => {
+], async (req: Request, res: Response) => {
   // Finds the validation errors in this request and wraps them in an object with handy functions
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(422).send({ errors: errors.array() });
   }
 
-  const name = req.body.name;
-  const password = req.body.password;
+  // express-validator has checked the shape; the body itself is untyped.
+  const name: string = req.body.name;
+  const password: string = req.body.password;
 
   try {
-    const user = await db.knex('t_user')
+    const user: UserRow | undefined = await db.knex('t_user')
       .where('name', '=', name)
       .andWhere('password', '=', md5(password))
       .first();
@@ -60,7 +61,7 @@ router.post('/me', [
 });
 
 // Log out: destroy the server-side session and clear the cookie
-router.post('/logout', async (req, res) => {
+router.post('/logout', async (req: Request, res: Response) => {
   try {
     await destroySession(getSessionSecret(req));
     res.clearCookie(SESSION_COOKIE, sessionCookieOptions());
@@ -73,11 +74,11 @@ router.post('/logout', async (req, res) => {
 
 // 获取用户信息
 // Auth is handled by the middleware in api.js -- GET /auth/me is not a public route
-router.get('/me', (req, res) => {
+router.get('/me', (req: Request, res: Response) => {
   // 同时告诉客户端，服务器是否启用用户验证
   const auth = config.auth;
   const user = config.auth
-    ? { name: req.user.name, group: req.user.group }
+    ? { name: req.user!.name, group: req.user!.group }
     : { name: 'admin', group: 'administrator' };
   res.send({ user, auth });
 });
