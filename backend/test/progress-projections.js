@@ -8,13 +8,14 @@ process.env.FREEZE_CONFIG_FILE = '1';
 
 const { expect } = require('chai');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const { makeQueries } = require('../database/queries');
 
 describe('the two track-progress projections agree', () => {
   let knex, queries;
 
   beforeEach(async () => {
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_track_progress', (t) => {
       t.string('user_name'); t.string('work_id'); t.string('track_key');
       t.float('seconds'); t.boolean('completed');

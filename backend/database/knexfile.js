@@ -1,10 +1,11 @@
 const path = require('path');
 const { config } = require('../config');
+const Client_NodeSQLite = require('./node-sqlite-client');
 
 module.exports = {
   // Default environment
   development: {
-    client: 'sqlite3', // 数据库类型
+    client: Client_NodeSQLite, // 数据库类型
     useNullAsDefault: true,
     connection: { // 连接参数
       filename: path.join(config.databaseFolderDir, 'db.sqlite3'),
@@ -12,15 +13,14 @@ module.exports = {
     acquireConnectionTimeout: 40000, // 连接计时器
     pool: {
       afterCreate: (conn, done) => {
-        conn.run('PRAGMA foreign_keys = ON;', function (err) {
-          if (err) {
-            done(err, conn);
-          } else {
-            conn.run(`PRAGMA busy_timeout = ${config.dbBusyTimeout};`, function (err) {
-              done(err, conn);
-            });
-          }
-        });
+        // DatabaseSync is synchronous, so no callback chain is needed here.
+        try {
+          conn.exec('PRAGMA foreign_keys = ON;');
+          conn.exec(`PRAGMA busy_timeout = ${config.dbBusyTimeout};`);
+          done(null, conn);
+        } catch (err) {
+          done(err, conn);
+        }
       }
     }
   },
@@ -29,7 +29,7 @@ module.exports = {
   // config.js) -- there is no separate production database, so this mirrors
   // `development` exactly.
   production: {
-    client: 'sqlite3',
+    client: Client_NodeSQLite,
     useNullAsDefault: true,
     connection: {
       filename: path.join(config.databaseFolderDir, 'db.sqlite3'),
@@ -37,22 +37,21 @@ module.exports = {
     acquireConnectionTimeout: 40000,
     pool: {
       afterCreate: (conn, done) => {
-        conn.run('PRAGMA foreign_keys = ON;', function (err) {
-          if (err) {
-            done(err, conn);
-          } else {
-            conn.run(`PRAGMA busy_timeout = ${config.dbBusyTimeout};`, function (err) {
-              done(err, conn);
-            });
-          }
-        });
+        // DatabaseSync is synchronous, so no callback chain is needed here.
+        try {
+          conn.exec('PRAGMA foreign_keys = ON;');
+          conn.exec(`PRAGMA busy_timeout = ${config.dbBusyTimeout};`);
+          done(null, conn);
+        } catch (err) {
+          done(err, conn);
+        }
       }
     }
   },
 
   // For migration only. Foreign keys are disabled (SQLite default)
   upgrade: {
-    client: 'sqlite3',
+    client: Client_NodeSQLite,
     connection: {
       filename: path.join(config.databaseFolderDir, 'db.sqlite3')
     },
@@ -62,7 +61,7 @@ module.exports = {
   },
 
   test: {
-    client: "sqlite3",
+    client: Client_NodeSQLite,
     connection: {
       filename: path.join(__dirname, '../test/db-test.sqlite3'),
     },

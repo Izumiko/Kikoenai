@@ -10,6 +10,7 @@ const { join } = require('path');
 
 const { parseSearchQuery, formatSearchTerm, formatSearchQuery } = require('../database/search-query');
 const { makeQueries } = require('../database/queries');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const { nameToUUID } = require('../scraper/utils');
 
 describe('parseSearchQuery()', function () {
@@ -134,7 +135,7 @@ describe('getWorksByFilter() advanced filtering', function () {
   before('Build a small in-file library', async function () {
     if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
     knex = require('knex')({
-      client: 'sqlite3',
+      client: Client_NodeSQLite,
       useNullAsDefault: true,
       connection: { filename: TEST_DB },
     });

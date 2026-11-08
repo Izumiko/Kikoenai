@@ -12,6 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 
 const { getTrackList, toTree } = require('../filesystem/utils');
 const { legacyIndex } = require('../routes/utils/track');
@@ -127,7 +128,7 @@ describe('track identity: relPath', function () {
     let knex;
 
     beforeEach(async function () {
-      knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+      knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
       await knex.schema.createTable('t_work', t => { t.string('id').primary(); t.text('memo'); });
       await knex.schema.createTable('t_play_history', t => {
         t.string('user_name'); t.string('work_id'); t.text('state');
@@ -300,7 +301,7 @@ describe('rekey-track-progress (opt-in recovery)', function () {
     savedRootFolders = config.rootFolders;
     config.rootFolders = [{ name: 'root', path: root }];
 
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', t => {
       t.string('id').primary(); t.string('root_folder'); t.string('dir');
     });
@@ -372,7 +373,7 @@ describe('migration 20260912000000 re-run', function () {
   let knex;
 
   beforeEach(async function () {
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', t => { t.string('id').primary(); t.text('memo'); });
     await knex.schema.createTable('t_play_history', t => {
       t.string('user_name'); t.string('work_id'); t.text('state');

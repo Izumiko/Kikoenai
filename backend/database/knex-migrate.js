@@ -7,6 +7,7 @@ const { join } = require('path');
 const { readdirSync } = require('fs');
 const knex = require('knex');
 const knexfile = require('./knexfile');
+const Client_NodeSQLite = require('./node-sqlite-client');
 
 function getMigrationsDir() {
   return join(__dirname, 'migrations');
@@ -15,7 +16,7 @@ function getMigrationsDir() {
 function getKnexInstance() {
   const env = process.env.KNEX_ENV || process.env.NODE_ENV || 'upgrade';
   const config = Object.assign({}, knexfile[env]);
-  if (config.client === 'sqlite3') {
+  if (config.client === Client_NodeSQLite) {
     config.useNullAsDefault = true;
   }
   config.pool = { max: 10, min: 0, idleTimeoutMillis: 1000 };

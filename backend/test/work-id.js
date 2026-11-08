@@ -11,6 +11,7 @@ const { join } = require('path');
 const { isFanzaId, isBooksId, canonicalizeWorkId, fanzaCid, workno } = require('../work-id');
 const { coverFileName, workImageFileName, getFolderList } = require('../filesystem/utils');
 const migration = require('../database/migrations/20260828000000_canonical_fanza_id');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 
 describe('work-id helpers', function () {
   it('recognises both Fanza spellings, and no DLsite id', function () {
@@ -107,7 +108,7 @@ describe('migration 20260828000000 (d_215444 → d215444)', function () {
   before('Build a two-work library with a pre-migration Fanza id', async function () {
     if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
     knex = require('knex')({
-      client: 'sqlite3', useNullAsDefault: true, connection: { filename: TEST_DB },
+      client: Client_NodeSQLite, useNullAsDefault: true, connection: { filename: TEST_DB },
     });
     await knex.schema.createTable('t_work', t => { t.string('id'); t.string('title'); });
     await knex.schema.createTable('r_tag_work', t => { t.string('tag_id'); t.string('work_id'); });

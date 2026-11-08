@@ -5,6 +5,7 @@ process.env.FREEZE_CONFIG_FILE = true;
 //eslint-disable-next-line n/no-unpublished-require
 const { expect } = require('chai');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const { makeQueries } = require('../database/queries');
 const { runBackfill } = require('../scripts/backfill-progress');
 const { addWorkFileSchema } = require('./helpers/schema');
@@ -19,7 +20,7 @@ describe('backfill reads the position from t_track_progress', () => {
   const track = (workId, relPath, duration) => ({ trackId: `${workId}/${relPath}`, title: relPath, duration });
 
   beforeEach(async () => {
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', t => {
       t.string('id').primary(); t.string('root_folder'); t.string('dir');
     });

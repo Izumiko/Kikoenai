@@ -50,6 +50,7 @@
 const path = require('path');
 const Knex = require('knex');
 const db = require(path.join(__dirname, '..', 'database', 'db'));
+const Client_NodeSQLite = require(path.join(__dirname, '..', 'database', 'node-sqlite-client'));
 const { config } = require(path.join(__dirname, '..', 'config'));
 const { formatID } = require(path.join(__dirname, '..', 'filesystem', 'utils'));
 const { listWorkTracks } = require(path.join(__dirname, '..', 'filesystem', 'workFiles'));
@@ -129,12 +130,11 @@ async function runImport({
   log = (m) => console.log(m),
   dbApi = db,
 } = {}) {
-  // Read-only would be nicer, but knex's sqlite3 dialect ORs its own
-  // OPEN_READWRITE | OPEN_CREATE into whatever `flags` you pass, and adding
-  // OPEN_READONLY to those makes an illegal combination (SQLITE_MISUSE). Only
-  // SELECTs are ever issued against this handle.
+  // Read-only would be nicer, but a read-only handle turns a mistyped path
+  // into a hard error instead of an empty database. Only SELECTs are ever
+  // issued against this handle.
   const oldKnex = Knex({
-    client: 'sqlite3',
+    client: Client_NodeSQLite,
     useNullAsDefault: true,
     connection: { filename: oldDbPath },
   });

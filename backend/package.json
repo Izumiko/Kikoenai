@@ -42,8 +42,7 @@
     "assets": [
       "dist/**/*",
       "static/**/*",
-      "scraper/tag-aliases.json",
-      "node_modules/sqlite3/build/node_sqlite3.node"
+      "scraper/tag-aliases.json"
     ],
     "outputPath": "package"
   },
@@ -69,18 +68,18 @@
     "limit-promise": "^1.0.6",
     "lodash": "^4.17.21",
     "md5": "^2.3.0",
+    "mime-types": "^3.0.0",
     "natural-orderby": "^2.0.3",
     "socket.io": "^4.8.4",
-    "sqlite3": "^6.0.1",
     "string-random": "^0.1.3",
-    "undici": "^7.29.0",
     "tunnel-agent": "^0.6.0",
+    "undici": "^7.29.0",
     "url-join": "^4.0.1",
     "uuid": "^14.0.3",
-    "yargs": "^16.2.0",
-    "mime-types": "^3.0.0"
+    "yargs": "^16.2.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
     "chai": "^4.3.4",
     "chai-string": "^1.5.0",
     "cross-env": "^10.1.0",
@@ -89,7 +88,6 @@
     "mocha": "^12.0.3",
     "nodemon": "^3.1.14",
     "serve-index": "^1.9.1",
-    "@types/node": "^26.6.6",
     "typescript": "^6.0.3"
   }
 }

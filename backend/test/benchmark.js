@@ -8,6 +8,7 @@ const { formatSearchTerm } = require('../database/search-query');
 const { config } = require('../config');
 const knex = require('knex');
 const knexfile = require('../database/knexfile');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const chai = require('chai');
 
 const expect = chai.expect;
@@ -63,7 +64,7 @@ describe('DB query benchmark', function () {
     }
 
     if (process.env.BENCH_DB) {
-      myKnex = knex({ client: 'sqlite3', useNullAsDefault: true, connection: { filename: process.env.BENCH_DB } });
+      myKnex = knex({ client: Client_NodeSQLite, useNullAsDefault: true, connection: { filename: process.env.BENCH_DB } });
     } else {
       myKnex = knex(knexfile.development);
     }

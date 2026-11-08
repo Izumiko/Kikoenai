@@ -11,6 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 
 const { makeQueries } = require('../database/queries');
 const { getTrackList } = require('../filesystem/utils');
@@ -31,7 +32,7 @@ describe('work file listing (t_work_file)', () => {
     workDir = path.join(root, 'w1');
     fs.mkdirSync(workDir);
 
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', (t) => {
       t.string('id').primary(); t.string('root_folder'); t.string('dir');
     });

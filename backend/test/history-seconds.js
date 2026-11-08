@@ -1,6 +1,7 @@
 //eslint-disable-next-line n/no-unpublished-require
 const { expect } = require('chai');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const { makeQueries } = require('../database/queries');
 
 // applyTrackProgressSeconds is internal; exercise it through getPlayHistory,
@@ -9,7 +10,7 @@ describe('play history seconds come from t_track_progress', () => {
   let knex, queries;
 
   before(async () => {
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_circle', t => { t.string('id').primary(); t.string('name'); });
     await knex.schema.createTable('t_work', t => {
       t.string('id').primary(); t.string('title'); t.string('circle_id');

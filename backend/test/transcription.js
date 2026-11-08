@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const { MockAgent, setGlobalDispatcher, getGlobalDispatcher } = require('undici');
 
 const { config } = require('../config');
@@ -273,7 +274,7 @@ describe('subtitle overlay', () => {
     savedLyricDir = config.lyricFolderDir;
     config.lyricFolderDir = lyricDir;
 
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', (t) => {
       t.string('id').primary(); t.string('root_folder'); t.string('dir');
     });
@@ -471,7 +472,7 @@ describe('transcribeWork', () => {
     config.lyricFolderDir = path.join(root, 'lyrics');
     config.rootFolders = [{ name: 'root', path: root }];
 
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', (t) => {
       t.string('id').primary(); t.string('root_folder'); t.string('dir');
     });

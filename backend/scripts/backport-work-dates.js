@@ -28,6 +28,7 @@
 const path = require('path');
 const Knex = require('knex');
 const db = require(path.join(__dirname, '..', 'database', 'db'));
+const Client_NodeSQLite = require(path.join(__dirname, '..', 'database', 'node-sqlite-client'));
 const { formatID } = require(path.join(__dirname, '..', 'filesystem', 'utils'));
 
 async function runBackport({
@@ -36,11 +37,11 @@ async function runBackport({
   log = (m) => console.log(m),
   dbApi = db,
 } = {}) {
-  // Read-only would be nicer, but knex's sqlite3 dialect ORs its own
-  // OPEN_READWRITE | OPEN_CREATE into whatever `flags` you pass, and adding
-  // OPEN_READONLY makes an illegal combination. Only SELECTs are issued here.
+  // Read-only would be nicer, but a read-only handle turns a mistyped path
+  // into a hard error instead of an empty database. Only SELECTs are issued
+  // here.
   const oldKnex = Knex({
-    client: 'sqlite3',
+    client: Client_NodeSQLite,
     useNullAsDefault: true,
     connection: { filename: oldDbPath },
   });

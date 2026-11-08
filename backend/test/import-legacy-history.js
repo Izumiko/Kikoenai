@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const knexLib = require('knex');
+const Client_NodeSQLite = require('../database/node-sqlite-client');
 const { makeQueries } = require('../database/queries');
 const { config } = require('../config');
 const { runImport } = require('../scripts/import-legacy-history');
@@ -32,7 +33,7 @@ describe('import-legacy-history', () => {
     savedRootFolders = config.rootFolders;
     config.rootFolders = [{ name: 'root', path: tmpRoot }];
 
-    knex = knexLib({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
+    knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
     await knex.schema.createTable('t_work', t => {
       t.string('id').primary(); t.string('title'); t.string('root_folder'); t.string('dir'); t.text('memo');
     });
@@ -56,7 +57,7 @@ describe('import-legacy-history', () => {
 
     // The legacy database, in the kikoeru-project shape.
     oldDbPath = path.join(tmpRoot, 'old.sqlite3');
-    oldKnex = knexLib({ client: 'sqlite3', connection: { filename: oldDbPath }, useNullAsDefault: true });
+    oldKnex = knexLib({ client: Client_NodeSQLite, connection: { filename: oldDbPath }, useNullAsDefault: true });
     await oldKnex.schema.createTable('t_history', t => {
       t.increments('id'); t.string('user_name'); t.string('work_id');
       t.string('file_index'); t.string('file_name');
