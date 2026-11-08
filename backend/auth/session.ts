@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import crypto from 'crypto';
 
 import { knex } from '../database/db.ts';
@@ -20,13 +18,31 @@ const COOKIE_PATH = config.basePath || '/';
 
 // The client holds the secret; only its SHA-256 is ever stored. A leaked database
 // file therefore does not hand over live sessions.
-const hashSecret = (secret) => crypto.createHash('sha256').update(secret).digest('hex');
+const hashSecret = (secret: string): string => crypto.createHash('sha256').update(secret).digest('hex');
+
+/**
+ * The request surface these helpers read: the parsed session cookie and the
+ * bearer header. Declared structurally so this module does not depend on
+ * Express's cookie augmentation just to read `req.cookies`.
+ */
+interface SessionRequest {
+  cookies?: Record<string, string>;
+  headers: { authorization?: string };
+}
+
+/** Cookie attributes shared by res.cookie and res.clearCookie. */
+interface SessionCookieOptions {
+  httpOnly: boolean;
+  sameSite: 'lax';
+  secure: boolean;
+  path: string;
+}
 
 /**
  * Read the session secret from the cookie (browsers) or from an
  * `Authorization: Bearer` header (scripts and other non-browser clients).
  */
-const getSessionSecret = (req) => {
+const getSessionSecret = (req: SessionRequest): string | null => {
   if (req.cookies && req.cookies[SESSION_COOKIE]) {
     return req.cookies[SESSION_COOKIE];
   }
@@ -38,7 +54,7 @@ const getSessionSecret = (req) => {
 
 // Shared by res.cookie and res.clearCookie -- clearing only works when the
 // options match those the cookie was set with.
-const sessionCookieOptions = () => ({
+const sessionCookieOptions = (): SessionCookieOptions => ({
   httpOnly: true,
   sameSite: 'lax',
   // Conditional on purpose: many self-hosted installs run plain HTTP on a LAN,
@@ -52,7 +68,7 @@ const sessionCookieOptions = () => ({
 });
 
 // Create a session and return the secret handed to the client (only its hash is stored)
-const createSession = async (userName) => {
+const createSession = async (userName: string): Promise<string> => {
   const secret = crypto.randomBytes(32).toString('hex');
   await knex('t_session').insert({
     id: hashSecret(secret),
@@ -65,7 +81,7 @@ const createSession = async (userName) => {
 // Returns { name, group } for a live session, or null.
 // `group` is read from t_user on every request rather than captured at login, so
 // demoting an administrator takes effect immediately instead of at token expiry.
-const getSession = async (secret) => {
+const getSession = async (secret: string | null): Promise<{ name: string; group: string } | null> => {
   if (!secret) {
     return null;
   }
@@ -79,7 +95,7 @@ const getSession = async (secret) => {
   return row || null;
 };
 
-const destroySession = (secret) => {
+const destroySession = (secret: string | null): Promise<number> => {
   if (!secret) {
     return Promise.resolve(0);
   }
@@ -87,8 +103,8 @@ const destroySession = (secret) => {
 };
 
 // Used after a password change to invalidate that user's other sessions immediately
-const destroyUserSessions = (userName) => knex('t_session').where('user_name', '=', userName).del();
+const destroyUserSessions = (userName: string): Promise<number> => knex('t_session').where('user_name', '=', userName).del();
 
-const sweepExpired = () => knex('t_session').where('expires_at', '<=', Date.now()).del();
+const sweepExpired = (): Promise<number> => knex('t_session').where('expires_at', '<=', Date.now()).del();
 
 export { SESSION_COOKIE, getSessionSecret, sessionCookieOptions, createSession, getSession, destroySession, destroyUserSessions, sweepExpired };

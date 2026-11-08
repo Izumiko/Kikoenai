@@ -1,17 +1,15 @@
-// @ts-nocheck
-
 import path from 'path';
 import urljoin from '../../lib/url-join.ts';
 
 // work.dir and track.subtitle may contain '/' or '\' if they have subfolders
 // ["RJ123456", "画像/好きな人?"] => ["RJ123456", "%E7%94%BB%E5%83%8F", "%E5%A5%BD%E3%81%8D%E3%81%AA%E4%BA%BA%3F"]
-const encodeSplitFragments = (fragments) => {
+const encodeSplitFragments = (fragments: string[]): string[] => {
   // On windows, replace "dir\RJ123456" => "dir/RJ123456"
   const expandedFragments = fragments.map(fragment => fragment.replace(/\\/g, '/').split('/'));
   return expandedFragments.flat().map(fragment => encodeURIComponent(fragment));
 };
 
-const joinFragments = (baseUrl, ...fragments) => {
+const joinFragments = (baseUrl: string, ...fragments: string[]): string => {
   const pattern = new RegExp(/^https?:\/\//);
   const encodedFragments = encodeSplitFragments(fragments);
 
@@ -48,6 +46,6 @@ const joinFragments = (baseUrl, ...fragments) => {
  * before sending. Encoding here just makes the string we hand out match the
  * request that comes back.
  */
-const encodeTrackId = (trackId) => String(trackId).split('/').map(encodeURIComponent).join('/');
+const encodeTrackId = (trackId: string): string => String(trackId).split('/').map(encodeURIComponent).join('/');
 
 export { joinFragments, encodeTrackId };

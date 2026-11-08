@@ -1,8 +1,7 @@
-// @ts-nocheck
-
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import type { Config } from './types/config.ts';
 
 const appDir = import.meta.dirname;
 
@@ -35,9 +34,11 @@ const versionWithoutVerTracking = '0.4.1';
 // Before the following version, db path is using the absolute path in databaseFolderDir of config.json
 const versionDbRelativePath = '0.5.8';
 
-let config = {};
+// Filled in by initConfig()/readConfig() at the bottom of this module, before
+// any importer can read it.
+let config = {} as Config;
 
-const voiceWorkDefaultPath = () => {
+const voiceWorkDefaultPath = (): string => {
   if (process.env.IS_DOCKER) {
     return '/usr/src/kikoeru/VoiceWork';
   } else {
@@ -45,7 +46,7 @@ const voiceWorkDefaultPath = () => {
   }
 };
 
-const defaultConfig = {
+const defaultConfig: Config = {
   version: pjson.version,
   production: process.env.NODE_ENV === 'production' ? true : false,
   dbBusyTimeout: 1000,
@@ -102,14 +103,14 @@ const defaultConfig = {
   lyricFolderDir: path.join(dataRoot, 'lyrics'),
   lyricUseDefaultPath: false, // Ignores lyricFolderDir if set to true
 };
-const initConfig = (writeConfigToFile = !process.env.FREEZE_CONFIG_FILE) => {
+const initConfig = (writeConfigToFile: boolean = !process.env.FREEZE_CONFIG_FILE): void => {
   config = Object.assign(config, defaultConfig);
   if (writeConfigToFile) {
     fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, "\t"));
   }
 };
 
-const setConfig = (newConfig, writeConfigToFile = !process.env.FREEZE_CONFIG_FILE) => {
+const setConfig = (newConfig: Partial<Config>, writeConfigToFile: boolean = !process.env.FREEZE_CONFIG_FILE): void => {
   // Prevent changing some values, overwrite with old ones
   newConfig.production = config.production;
   newConfig.md5secret = config.md5secret;
@@ -128,14 +129,14 @@ const setConfig = (newConfig, writeConfigToFile = !process.env.FREEZE_CONFIG_FIL
 
 // True when `dir` is at or below `base`. An absolute result means another
 // Windows drive.
-const isWithin = (base, dir) => {
+const isWithin = (base: string, dir: string): boolean => {
   const relative = path.relative(base, dir);
   return !relative.startsWith('..') && !path.isAbsolute(relative);
 };
 
 // Re-root a data folder that an earlier run pinned inside the application
 // directory.
-const rerootFromAppDir = (dir) => {
+const rerootFromAppDir = (dir: string): string => {
   if (dataRoot === appDir) return dir;
 
   // Checked FIRST, or a data root inside the app directory never settles:
@@ -159,7 +160,7 @@ const rerootFromAppDir = (dir) => {
  * @param {Boolean} useDefault Ignore `dir` and use dataRoot/defaultName.
  * @returns {String} Absolute path.
  */
-const resolveDataFolder = (dir, defaultName, useDefault) => {
+const resolveDataFolder = (dir: string, defaultName: string, useDefault: boolean): string => {
   if (useDefault) return path.join(dataRoot, defaultName);
   if (!dir) return path.join(dataRoot, defaultName);
   if (!path.isAbsolute(dir)) return path.join(dataRoot, dir);
@@ -171,7 +172,7 @@ const resolveDataFolder = (dir, defaultName, useDefault) => {
  *
  * Must run after ANY assignment into `config`, not just the initial read.
  */
-const resolveDataFolders = () => {
+const resolveDataFolders = (): void => {
   config.coverFolderDir = resolveDataFolder(config.coverFolderDir, 'covers', config.coverUseDefaultPath);
   config.imageFolderDir = resolveDataFolder(config.imageFolderDir, 'images', config.imageUseDefaultPath);
   config.databaseFolderDir = resolveDataFolder(config.databaseFolderDir, 'sqlite', config.dbUseDefaultPath);
@@ -185,19 +186,28 @@ const resolveDataFolders = () => {
  * Must run after ANY assignment into `config`, for the same reason
  * resolveDataFolders() does.
  */
-const resolveBasePath = () => {
+const resolveBasePath = (): void => {
   config.basePath = normalizeBasePath(config.basePath);
 };
 
+// Copy one value of `defaultConfig` onto a config object read from a file that
+// may predate the current version. A plain indexed write cannot express that
+// the key narrows the value's type; the keys always come from iterating
+// `defaultConfig`, so they are `keyof Config`.
+const copyDefault = <K extends keyof Config>(target: Config, key: K): void => {
+  target[key] = defaultConfig[key];
+};
+
 // Get or use default value
-const readConfig = () => {
-  config = JSON.parse(fs.readFileSync(configPath));
+const readConfig = (): void => {
+  config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   for (let key in defaultConfig) {
+    const configKey = key as keyof Config;
     if (!config.hasOwnProperty(key)) {
-      if (key === 'version') {
-        config['version'] = versionWithoutVerTracking;
+      if (configKey === 'version') {
+        config.version = versionWithoutVerTracking;
       } else {
-        config[key] = defaultConfig[key];
+        copyDefault(config, configKey);
       }
     }
   }
@@ -219,13 +229,14 @@ const readConfig = () => {
 };
 
 // Migrate config
-const updateConfig = (writeConfigToFile = !process.env.FREEZE_CONFIG_FILE) => {
-  let cfg = JSON.parse(fs.readFileSync(configPath));
+const updateConfig = (writeConfigToFile: boolean = !process.env.FREEZE_CONFIG_FILE): void => {
+  // Only complete once the key loop below has run.
+  const cfg: Config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   let countChanged = 0;
   for (let key in defaultConfig) {
     if (!cfg.hasOwnProperty(key)) {
       console.log('Adding missing config key:', key);
-      cfg[key] = defaultConfig[key];
+      copyDefault(cfg, key as keyof Config);
       countChanged += 1;
     }
   }
@@ -282,7 +293,7 @@ if (!fs.existsSync(configPath)) {
     try {
       fs.mkdirSync(configFolderDir, { recursive: true });
     } catch(err) {
-      console.error(` ! Failed to create the config folder: ${err.message}`);
+      console.error(` ! Failed to create the config folder: ${(err as Error).message}`);
     }
   }
   const writeConfigToFile = !process.env.FREEZE_CONFIG_FILE;

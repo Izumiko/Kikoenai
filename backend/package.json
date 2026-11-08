@@ -16,7 +16,7 @@
   },
   "scripts": {
     "start": "cross-env NODE_ENV=production node --trace-warnings app.ts",
-    "dev": "node --watch --watch-path=auth --watch-path=database --watch-path=filesystem --watch-path=routes --watch-path=scraper --watch-path=scripts --watch-path=test --watch-path=app.ts --watch-path=api.ts --watch-path=asr.ts --watch-path=base-path.ts --watch-path=common.ts --watch-path=config.ts --watch-path=socket.ts --watch-path=suggest-track-titles.ts --watch-path=track-titles.ts --watch-path=transcribe-work.ts --watch-path=upgrade.ts --watch-path=work-id.ts --trace-warnings app.ts",
+    "dev": "node --watch --watch-path=auth --watch-path=database --watch-path=filesystem --watch-path=lib --watch-path=routes --watch-path=scraper --watch-path=scripts --watch-path=test --watch-path=types --watch-path=app.ts --watch-path=api.ts --watch-path=asr.ts --watch-path=base-path.ts --watch-path=common.ts --watch-path=config.ts --watch-path=socket.ts --watch-path=suggest-track-titles.ts --watch-path=track-titles.ts --watch-path=transcribe-work.ts --watch-path=upgrade.ts --watch-path=work-id.ts --trace-warnings app.ts",
     "scan": "node --trace-warnings ./filesystem/scanner.ts",
     "backfill:progress": "node --trace-warnings ./scripts/backfill-progress.ts",
     "import:legacy-history": "node --trace-warnings ./scripts/import-legacy-history.ts",
@@ -65,6 +65,7 @@
   },
   "devDependencies": {
     "@types/chai": "^4.3.20",
+    "@types/express": "^5.0.6",
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.6.6",
     "chai": "^4.3.4",

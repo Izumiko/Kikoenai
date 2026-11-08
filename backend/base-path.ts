@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Serving Kikoenai from somewhere other than the root of a hostname.
  *
@@ -35,16 +34,16 @@ const SAFE_SEGMENT = /^[A-Za-z0-9._~%-]+$/;
  * throwing -- a typo in an optional setting should not stop the server from
  * booting.
  *
- * @param {String} value Raw config.basePath.
+ * @param {unknown} value Raw config.basePath.
  * @returns {String} '' or '/prefix'.
  */
-const normalizeBasePath = (value) => {
+const normalizeBasePath = (value: unknown): string => {
   if (typeof value !== 'string') return '';
 
   const raw = value.trim();
   if (!raw || raw === '/') return '';
 
-  const reject = (reason) => {
+  const reject = (reason: string): string => {
     console.warn(`basePath ${reason}，已忽略: "${value}"`);
     console.warn(`basePath ${reason} -- ignoring "${value}" and serving from the root.`);
     return '';
@@ -81,6 +80,6 @@ const normalizeBasePath = (value) => {
  * @param {String} basePath Normalized prefix ('' or '/prefix').
  * @returns {String}
  */
-const applyBasePath = (text, basePath) => text.split(PUBLIC_PATH_TOKEN).join(`${basePath}/`);
+const applyBasePath = (text: string, basePath: string): string => text.split(PUBLIC_PATH_TOKEN).join(`${basePath}/`);
 
 export { PUBLIC_PATH_TOKEN, normalizeBasePath, applyBasePath };

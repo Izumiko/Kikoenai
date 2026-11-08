@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Makes a scraped 作品内容 block safe to hand to the browser.
  *
@@ -33,7 +32,7 @@ const ALLOWED_TAGS = new Set([
 const DROPPED_TAGS = ['script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet',
   'form', 'input', 'button', 'select', 'textarea', 'link', 'meta', 'base', 'noscript', 'template', 'svg', 'math'];
 
-const ALLOWED_ATTRS = {
+const ALLOWED_ATTRS: Record<string, Set<string>> = {
   a: new Set(['href', 'title']),
   // `loading` is ours, set by the image pass; the attribute walk runs after it
   // and would otherwise strip it back off.
@@ -53,6 +52,16 @@ const ALLOWED_STYLE_PROPS = new Set([
 const SAFE_HREF = /^(https?:)?\/\//i;
 
 /**
+ * The element fields the attribute pass reads. `$('*')` matches elements only,
+ * but cheerio's selector typing cannot tell a bare `*` from text nodes, so it
+ * hands back `AnyNode`.
+ */
+interface ElementLike {
+  tagName: string;
+  attribs: Record<string, string>;
+}
+
+/**
  * Key an image url so the stored entry and the markup agree.
  *
  * They do not agree as written: DLsite serves the block with protocol-relative
@@ -62,10 +71,10 @@ const SAFE_HREF = /^(https?:)?\/\//i;
  * @param {String} url
  * @returns {String}
  */
-const imageKey = url => String(url || '').trim().replace(/^https?:/i, '');
+const imageKey = (url: string | null | undefined): string => String(url || '').trim().replace(/^https?:/i, '');
 
 /** Where this server serves one downloaded image from. */
-const localImageUrl = (workId, file) =>
+const localImageUrl = (workId: string, file: string): string =>
   `${config.basePath}/api/image/${encodeURIComponent(workId)}/${encodeURIComponent(file)}`;
 
 // A row written before the scraper kept the markup, or by the JSON fallback
@@ -80,14 +89,14 @@ const HTML_TAG = /<[a-z][^>]*>/i;
  * @param {String} description
  * @returns {Boolean}
  */
-const looksLikeHtml = description => HTML_TAG.test(String(description || ''));
+const looksLikeHtml = (description: string | null | undefined): boolean => HTML_TAG.test(String(description || ''));
 
 /**
  * Keep only the declarations that lay text out, never the ones that colour it.
  * @param {String} style Raw style attribute.
  * @returns {String} Filtered style attribute, '' when nothing survives.
  */
-const filterStyle = (style) => String(style)
+const filterStyle = (style: string): string => String(style)
   .split(';')
   .map(declaration => declaration.trim())
   .filter((declaration) => {
@@ -100,6 +109,15 @@ const filterStyle = (style) => String(style)
   .join('; ');
 
 /**
+ * One entry of `t_work.sample_images`: the remote url and the local file the
+ * downloader saved it as (`file` is null when the download did not happen).
+ */
+interface SampleImage {
+  url?: string | null;
+  file?: string | null;
+}
+
+/**
  * Sanitize one work's description markup, pointing its images at local files.
  *
  * @param {String} html Raw `description`, when it is markup.
@@ -108,11 +126,11 @@ const filterStyle = (style) => String(style)
  *   downloaded file for each remote url.
  * @returns {String} Markup safe for v-html, '' when nothing is left.
  */
-function sanitizeDescriptionHtml(html, workId, sampleImages = []) {
+function sanitizeDescriptionHtml(html: string, workId: string, sampleImages: SampleImage[] = []): string {
   if (!html) return '';
 
   // Remote url -> local file name, for the images that were downloaded.
-  const fileByUrl = {};
+  const fileByUrl: Record<string, string> = {};
   for (const image of sampleImages) {
     if (image && image.url && image.file) fileByUrl[imageKey(image.url)] = image.file;
   }
@@ -155,7 +173,8 @@ function sanitizeDescriptionHtml(html, workId, sampleImages = []) {
 
   $('*').each(function () {
     const el = $(this);
-    const tag = (this.tagName || '').toLowerCase();
+    const element = this as ElementLike;
+    const tag = (element.tagName || '').toLowerCase();
 
     if (!ALLOWED_TAGS.has(tag)) {
       // Unwrap: the tag goes, its text stays where the seller put it.
@@ -163,11 +182,11 @@ function sanitizeDescriptionHtml(html, workId, sampleImages = []) {
       return;
     }
 
-    const allowed = ALLOWED_ATTRS[tag] || new Set();
-    for (const name of Object.keys(this.attribs || {})) {
+    const allowed = ALLOWED_ATTRS[tag] || new Set<string>();
+    for (const name of Object.keys(element.attribs || {})) {
       const lower = name.toLowerCase();
       if (lower === 'style') {
-        const style = filterStyle(this.attribs[name]);
+        const style = filterStyle(element.attribs[name]);
         if (style) el.attr('style', style);
         else el.removeAttr(name);
         continue;

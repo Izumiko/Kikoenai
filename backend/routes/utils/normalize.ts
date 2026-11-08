@@ -1,23 +1,60 @@
-// @ts-nocheck
-
 import strftime from './strftime.ts';
 
+/**
+ * One row of a works listing, as database/queries.ts assembles it.
+ *
+ * The JSON columns are optional because the closed-source upstream schema
+ * supplied tagNames/tagIds/vaNames/vaIds instead of tagObj/vaObj, and because
+ * every *Obj column is deleted once unpacked. Anything not named here -- the
+ * scalar t_work columns -- passes through untouched.
+ */
+interface WorkListRow {
+  nsfw: string | number | boolean | null;
+  circleObj?: string;
+  rate_count_detail?: string;
+  rank?: string | null;
+  tagObj?: string;
+  tagNames?: string;
+  tagIds?: string;
+  vaObj?: string;
+  vaNames?: string;
+  vaIds?: string;
+  illustratorObj?: string;
+  scriptWriterObj?: string;
+  seriesObj?: string;
+  state?: string;
+  play_updated_at?: string;
+  updated_at?: string | Date;
+  [key: string]: unknown;
+}
+
+/** One label reference, as the *Obj JSON columns carry it. */
+interface LabelRef {
+  id: unknown;
+  name?: unknown;
+}
+
+interface NormalizeOptions {
+  dateOnly?: boolean;
+}
+
 // Normalize API endpoints
-const normalize = (works, options = {}) => {
+const normalize = (works: WorkListRow[], options: NormalizeOptions = {}): WorkListRow[] => {
   works.map(record => {
     record.nsfw = Boolean(record.nsfw);
-    record.circle = JSON.parse(record.circleObj);
-    record.rate_count_detail = JSON.parse(record.rate_count_detail);
+    // Both are always supplied by assembleWorks (and by both upstream schemas).
+    record.circle = JSON.parse(record.circleObj!);
+    record.rate_count_detail = JSON.parse(record.rate_count_detail!);
     record.rank = record.rank ? JSON.parse(record.rank) : null;
 
     // Open-source schema: tagObj/vaObj from staticMetadata view
     if (record.tagObj) {
-      const parsed = JSON.parse(record.tagObj);
+      const parsed: { tags?: LabelRef[] } = JSON.parse(record.tagObj);
       record.tags = parsed.tags || [];
     } else {
       // Closed-source upstream schema: tagNames/tagIds
-      const tagNames = record.tagNames ? JSON.parse(record.tagNames) : [];
-      const tagIds = record.tagIds ? JSON.parse(record.tagIds) : [];
+      const tagNames: string[] = record.tagNames ? JSON.parse(record.tagNames) : [];
+      const tagIds: string[] = record.tagIds ? JSON.parse(record.tagIds) : [];
       record.tags = tagNames.map((name, i) => ({
         id: tagIds[i],
         name: name
@@ -25,32 +62,32 @@ const normalize = (works, options = {}) => {
     }
 
     if (record.vaObj) {
-      const parsed = JSON.parse(record.vaObj);
+      const parsed: { vas?: LabelRef[] } = JSON.parse(record.vaObj);
       record.vas = parsed.vas || [];
     } else {
-      const vaNames = record.vaNames ? JSON.parse(record.vaNames) : [];
-      const vaIds = record.vaIds ? JSON.parse(record.vaIds) : [];
+      const vaNames: string[] = record.vaNames ? JSON.parse(record.vaNames) : [];
+      const vaIds: string[] = record.vaIds ? JSON.parse(record.vaIds) : [];
       record.vas = vaNames.map((name, i) => ({
         id: vaIds[i],
         name: name
       }));
     }
     if (record.illustratorObj) {
-      const parsed = JSON.parse(record.illustratorObj);
+      const parsed: { illustrators?: LabelRef[] } = JSON.parse(record.illustratorObj);
       record.illustrators = (parsed.illustrators || []).filter(i => i.id !== null);
     } else {
       record.illustrators = [];
     }
 
     if (record.scriptWriterObj) {
-      const parsed = JSON.parse(record.scriptWriterObj);
+      const parsed: { scriptWriters?: LabelRef[] } = JSON.parse(record.scriptWriterObj);
       record.scriptWriters = (parsed.scriptWriters || []).filter(s => s.id !== null);
     } else {
       record.scriptWriters = [];
     }
 
     if (record.seriesObj) {
-      const parsed = JSON.parse(record.seriesObj);
+      const parsed: { series?: LabelRef[] } = JSON.parse(record.seriesObj);
       const filtered = (parsed.series || []).filter(s => s.id !== null);
       record.series = filtered.length > 0 ? filtered[0] : null;
     } else {
@@ -58,8 +95,9 @@ const normalize = (works, options = {}) => {
     }
 
     if (record.hasOwnProperty("state")) {
-      record.state = JSON.parse(record.state);
-      record.play_updated_at = strftime('%F', record.play_updated_at);
+      // A play-history row always carries both; only the join produces them.
+      record.state = JSON.parse(record.state!);
+      record.play_updated_at = strftime('%F', record.play_updated_at!);
     }
     delete record.circleObj;
     delete record.tagObj;

@@ -1,9 +1,8 @@
-// @ts-nocheck
-
-import { validationResult } from 'express-validator';
+import { validationResult, param, type ValidationChain } from 'express-validator';
+import type { Request, Response } from 'express';
 import { canonicalizeWorkId } from '../../work-id.ts';
 
-const isValidRequest = (req, res, sendMessage = true) => {
+const isValidRequest = (req: Request, res: Response, sendMessage = true): boolean => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     if (sendMessage) {
@@ -23,7 +22,7 @@ const isValidRequest = (req, res, sendMessage = true) => {
  * pads to either 6 or 8 digits — so padding it here is always safe and lets
  * legacy ids self-heal on every route using these validators.
  */
-const padLegacyId = (id) => String(id).replace(/^(bj)?(\d{7})$/i, (m, prefix, digits) => `${prefix || ''}0${digits}`);
+const padLegacyId = (id: string): string => String(id).replace(/^(bj)?(\d{7})$/i, (m, prefix, digits) => `${prefix || ''}0${digits}`);
 
 /**
  * Sanitizer for every work-id route parameter: pads a legacy 7-digit DLsite id
@@ -31,7 +30,7 @@ const padLegacyId = (id) => String(id).replace(/^(bj)?(\d{7})$/i, (m, prefix, di
  * by an old bookmark or a stale PWA cache (`/work/d_215444`) keeps resolving
  * after migration 20260828000000. See work-id.js.
  */
-const normalizeWorkId = (id) => canonicalizeWorkId(padLegacyId(id));
+const normalizeWorkId = (id: string): string => canonicalizeWorkId(padLegacyId(id));
 
 /**
  * Work-id shape: a DLsite doujin id is
@@ -44,8 +43,7 @@ const WORK_ID_RE = /^(bj\d{6,8}|\d{6,8}|d_?\d+)$/i;
 /**
  * Returns an express-validator chain for a work id param (route param).
  */
-import expressValidator from 'express-validator';
-const workIdParam = () => expressValidator.param('id').isString().matches(WORK_ID_RE).customSanitizer(normalizeWorkId);
+const workIdParam = (): ValidationChain => param('id').isString().matches(WORK_ID_RE).customSanitizer(normalizeWorkId);
 
 // WORK_ID_RE and normalizeWorkId are exported for callers with no
 // express-validator chain to hang them off -- the Socket.IO handlers, which

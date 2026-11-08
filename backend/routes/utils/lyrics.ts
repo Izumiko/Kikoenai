@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Lyric sidecar files are matched against the audio track's name. For
 // "01 Track.mp3" the accepted names are "01 Track.<ext>" (preferred) and
 // "01 Track.mp3.<ext>", with the extension in either case.
@@ -14,10 +13,22 @@
 // file is ignored, so a whole-track transcript can sit beside the per-speaker
 // split without being drawn on top of it.
 import { supportedMediaExtList } from '../../filesystem/utils.ts';
+import type { Track } from '../../types/track.ts';
 
-const supportedLyricExtensions = ['.lrc', '.srt', '.vtt']; // in order of preference
+const supportedLyricExtensions: string[] = ['.lrc', '.srt', '.vtt']; // in order of preference
 
-const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeRegExp = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** One file that matched the track's lyric name, before the speaker is chosen. */
+interface LyricCandidate {
+  trackId: string;
+  lyricExtension: string;
+  speaker: number | null;
+  /** Sort key: the stem form beats the full-filename form. */
+  isStemForm: boolean;
+  /** Sort key: position in the caller's extension preference list. */
+  extRank: number;
+}
 
 /**
  * Find every lyric file belonging to `track`, among its siblings in `tracks`.
@@ -27,7 +38,7 @@ const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * `extensions` widens the search beyond what the player renders, for callers
  * asking whether a sidecar exists at all. Order is preference order.
  */
-const findLyricTracks = (track, tracks, extensions = supportedLyricExtensions) => {
+const findLyricTracks = (track: Track, tracks: Track[], extensions: string[] = supportedLyricExtensions): Array<{ trackId: string; lyricExtension: string }> => {
   const title = track.title;
   const dotIndex = title.lastIndexOf('.');
   const stem = dotIndex > 0 ? title.substring(0, dotIndex) : title;
@@ -45,7 +56,7 @@ const findLyricTracks = (track, tracks, extensions = supportedLyricExtensions) =
   // "01.mp3" and "01.2.mp3" would otherwise let "01.2.lrc" be read as speaker 2
   // of "01.mp3". Only media siblings count -- nothing else in the folder can
   // own a lyric file of its own.
-  const siblingStems = new Set();
+  const siblingStems = new Set<string>();
   tracks.forEach((item) => {
     if ((item.subtitle || '') !== (track.subtitle || '')) return;
     if (item.trackId === track.trackId) return;
@@ -53,7 +64,7 @@ const findLyricTracks = (track, tracks, extensions = supportedLyricExtensions) =
     siblingStems.add(item.title.substring(0, item.title.lastIndexOf('.')).toLowerCase());
   });
 
-  const candidates = [];
+  const candidates: LyricCandidate[] = [];
   tracks.forEach((item) => {
     if ((item.subtitle || '') !== (track.subtitle || '')) return;
     const match = lyricNameRe.exec(item.title);
@@ -76,7 +87,7 @@ const findLyricTracks = (track, tracks, extensions = supportedLyricExtensions) =
 
   // One file per speaker: among "01 Track.1.lrc" and "01 Track.1.srt", keep the
   // better-ranked one.
-  const bySpeaker = new Map();
+  const bySpeaker = new Map<number | null, LyricCandidate>();
   chosen
     .sort((a, b) => a.extRank - b.extRank || (a.isStemForm === b.isStemForm ? 0 : a.isStemForm ? -1 : 1))
     .forEach((candidate) => {
