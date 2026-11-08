@@ -1,9 +1,10 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
+
 /**
  * Drop `t_work.memo`, which has moved to t_work_file
  */
 
-export const up = async function (knex) {
+export const up = async (knex: Knex): Promise<void> => {
   if (!(await knex.schema.hasColumn('t_work', 'memo'))) return;
 
   // Guard rather than assume: a column that is indexed cannot be dropped this
@@ -12,7 +13,7 @@ export const up = async function (knex) {
   console.log('[drop-work-memo] t_work.memo dropped; duration/mtime/track_title live on t_work_file');
 };
 
-export const down = async function (knex) {
+export const down = async (knex: Knex): Promise<void> => {
   if (await knex.schema.hasColumn('t_work', 'memo')) return;
   // The column comes back empty. Its contents are not recoverable, and do not
   // need to be: t_work_file holds everything that was in it except

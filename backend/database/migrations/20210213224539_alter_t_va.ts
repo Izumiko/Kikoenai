@@ -1,7 +1,8 @@
-// @ts-nocheck
 // Purpose: change t_va(id) to store string UUID instead of old hash integer
 // See GitHub issue #22
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   // Note: SQLite disables foreign keys by default.
   // I did not set PRAGMA foreign_keys=on in afterCreate()
   // this up() function is wrapped inside a transaction, and SQLite does not support changing PRAGMA in transactions.
@@ -41,7 +42,7 @@ export const up = async function(knex) {
   }
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   try {
       // Will be recreated by the main program
     await knex.raw('DROP VIEW IF EXISTS userMetadata;');

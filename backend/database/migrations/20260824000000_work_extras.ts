@@ -1,14 +1,15 @@
-// @ts-nocheck
 // Adds the parts of a DLsite work page the scraper used to throw away:
 // the 作者 (author) credit, the 作品内容 description, the sample images and
 // the user reviews.
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   const hasAuthor = await knex.schema.hasTable('t_author');
   if (!hasAuthor) {
     await knex.schema.createTable('t_author', (table) => {
       table.string('id'); // UUID v5, based on name
       table.string('name').notNullable();
-      table.primary('id');
+      table.primary(['id']);
     });
   }
 
@@ -61,7 +62,7 @@ export const up = async function(knex) {
   }
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   await knex.schema.dropTableIfExists('t_dlsite_review');
   await knex.schema.dropTableIfExists('r_author_work');
   await knex.schema.dropTableIfExists('t_author');

@@ -1,5 +1,6 @@
-// @ts-nocheck
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   await knex.raw('PRAGMA foreign_keys=off');
   await knex.raw('PRAGMA ignore_check_constraints=on');
 
@@ -8,7 +9,7 @@ export const up = async function(knex) {
     await trx.schema.createTable('t_illustrator', (table) => {
       table.string('id');
       table.string('name').notNullable();
-      table.primary('id');
+      table.primary(['id']);
     });
 
     await trx.schema.createTable('r_illustrator_work', (table) => {
@@ -22,7 +23,7 @@ export const up = async function(knex) {
     await trx.schema.createTable('t_script_writer', (table) => {
       table.string('id');
       table.string('name').notNullable();
-      table.primary('id');
+      table.primary(['id']);
     });
 
     await trx.schema.createTable('r_script_writer_work', (table) => {
@@ -36,7 +37,7 @@ export const up = async function(knex) {
     await trx.schema.createTable('t_series', (table) => {
       table.integer('id');
       table.string('name').notNullable();
-      table.primary('id');
+      table.primary(['id']);
     });
 
     await trx.schema.createTable('r_series_work', (table) => {
@@ -103,7 +104,7 @@ export const up = async function(knex) {
   await knex.raw('PRAGMA foreign_keys=on');
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   await knex.raw('PRAGMA foreign_keys=off');
   await knex.raw('PRAGMA ignore_check_constraints=on');
 

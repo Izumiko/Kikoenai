@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import fs from 'fs';
 import { md5 } from '../auth/utils.ts';
 import knexMigrate from './knex-migrate.ts';
@@ -10,14 +8,14 @@ import { config, updateConfig } from '../config.ts';
 import { applyFix } from '../upgrade.ts';
 import { createSchema } from './schema.ts';
 
-const initApp = async () => {
+const initApp = async (): Promise<void> => {
   let configVersion = config.version;
   let currentVersion = pjson.version;
 
   
-  async function runMigrations () {
+  async function runMigrations (): Promise<number> {
     let count = 0;
-    const log = ({ action, migration }) => {
+    const log = ({ action, migration }: { action: string; migration: string }): void => {
       count += 1;
       console.log('Finished ' + action + ' on ' + migration);
     };
@@ -25,24 +23,24 @@ const initApp = async () => {
     return count;
   }
 
-  async function skipMigrations () {
+  async function skipMigrations (): Promise<void> {
     await knexMigrate('skipAll', {});
   }
 
   // Fix a nasty bug introduced in v0.5.1
-  async function fixMigrations () {
+  async function fixMigrations (): Promise<void> {
     if (compareVersions.compare(configVersion, 'v0.5.1', '>=') && compareVersions.compare(configVersion, 'v0.5.3', '<')) {
       await knexMigrate('skipAll', {to: '20210108093032'});
     }
   }
 
-  function initDatabaseDir () {
+  function initDatabaseDir (): void {
     const databaseFolderDir = config.databaseFolderDir;
     if (!fs.existsSync(databaseFolderDir)) {
       try {
         fs.mkdirSync(databaseFolderDir, { recursive: true });
       } catch(err) {
-        console.error(` ! 在创建存放数据库文件的文件夹时出错: ${err.message}`);
+        console.error(` ! 在创建存放数据库文件的文件夹时出错: ${(err as Error).message}`);
       }
     }
   }
@@ -82,7 +80,7 @@ const initApp = async () => {
         group: 'administrator'
       });
     } catch(err) {{
-        console.error(err.message);
+        console.error((err as Error).message);
         process.exit(1);
       }
     }
@@ -90,7 +88,7 @@ const initApp = async () => {
       await skipMigrations();
       console.log('数据库结构创建完成');
     } catch (err) {
-      console.error(` ! 在构建数据库结构过程中出错: ${err.message}`);
+      console.error(` ! 在构建数据库结构过程中出错: ${(err as Error).message}`);
       process.exit(1);
     }
     if (compareVersions.compare(currentVersion, configVersion, '>')) {

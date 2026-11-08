@@ -1,4 +1,5 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
+
 /**
  * Restore `t_work`'s foreign key to `t_circle`.
  *
@@ -11,7 +12,7 @@
  */
 
 
-const defineWork = (table) => {
+const defineWork = (table: Knex.CreateTableBuilder): void => {
   table.string('id').notNullable();
   table.timestamps(true, true);
   table.string('root_folder').notNullable();
@@ -32,18 +33,18 @@ const defineWork = (table) => {
   table.text('sample_images');
   table.datetime('files_indexed_at');
 
-  table.primary('id');
+  table.primary(['id']);
   table.foreign('circle_id').references('id').inTable('t_circle');
 };
 
 const INDEX_COLUMNS = ['circle_id', 'release', 'dl_count', 'review_count', 'price', 'rate_average_2dp'];
 
-const columnsOf = async (knex, tableName) => {
+const columnsOf = async (knex: Knex, tableName: string): Promise<string[]> => {
   const rows = await knex.raw(`SELECT name FROM pragma_table_info('${tableName}')`);
-  return rows.map((row) => row.name);
+  return rows.map((row: { name: string }) => row.name);
 };
 
-export const up = async function (knex) {
+export const up = async (knex: Knex): Promise<void> => {
   const existing = await columnsOf(knex, 't_work');
   if (!existing.length) return;
 
@@ -91,7 +92,7 @@ export const up = async function (knex) {
   }
 };
 
-export const down = async function () {
+export const down = async (): Promise<void> => {
   // Deliberately not reversible. Going back means rebuilding the table again to
   // *remove* a constraint that schema.js declares and a fresh install has -- i.e.
   // recreating the drift this exists to fix. Restore a backup instead.

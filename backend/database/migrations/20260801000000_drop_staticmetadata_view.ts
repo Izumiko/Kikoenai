@@ -1,9 +1,10 @@
-// @ts-nocheck
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   await knex.raw('DROP VIEW IF EXISTS staticMetadata');
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   // Recreate the view (verbatim from 20260731075621_add_illustrator_script_writer_series.js up)
   await knex.raw(`
     CREATE VIEW IF NOT EXISTS staticMetadata AS

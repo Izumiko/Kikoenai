@@ -1,9 +1,9 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
 
 import { uuidv5 } from '../../lib/uuid-v5.ts';
 
-export const up = async function(knex) {
-  const nameToUUID = (name) => {
+export const up = async (knex: Knex): Promise<void> => {
+  const nameToUUID = (name: string): string => {
     const namespace =  '699d9c07-b965-4399-bafd-18a3cacf073c'; 
     return uuidv5(name, namespace);
   };
@@ -27,9 +27,10 @@ export const up = async function(knex) {
   }
 };
 
-export const down = async function(knex) {
-  const hashNameIntoInt = (name) => {
-    let hash = '';
+export const down = async (knex: Knex): Promise<void> => {
+  const hashNameIntoInt = (name: string): number => {
+    // Numeric accumulator; the old empty-string start coerced to 0 here too.
+    let hash = 0;
     
     for (let i = 0; i < name.length; i += 1) {
       const char = name.charCodeAt(i);

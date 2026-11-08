@@ -1,10 +1,18 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
+
 /**
  * Cache a work's file tree in database.
  * t_work_file new column, populated from t_work.memo
  */
 
-export const up = async function (knex) {
+/** The parts of t_work.memo this migration reads (the column existed back then). */
+interface WorkMemo {
+  duration?: Record<string, number>;
+  mtime?: Record<string, number>;
+  trackTitles?: Record<string, string>;
+}
+
+export const up = async (knex: Knex): Promise<void> => {
   if (!(await knex.schema.hasColumn('t_work', 'files_indexed_at'))) {
     await knex.schema.alterTable('t_work', (table) => {
       table.datetime('files_indexed_at');
@@ -29,7 +37,7 @@ export const up = async function (knex) {
   let seededRows = 0;
 
   for (const work of works) {
-    let memo;
+    let memo: WorkMemo;
     try {
       memo = JSON.parse(work.memo || '{}') || {};
     } catch {
@@ -72,7 +80,7 @@ export const up = async function (knex) {
   );
 };
 
-export const down = async function (knex) {
+export const down = async (knex: Knex): Promise<void> => {
   await knex.schema.dropTableIfExists('t_work_file');
   if (await knex.schema.hasColumn('t_work', 'files_indexed_at')) {
     await knex.schema.alterTable('t_work', (table) => {

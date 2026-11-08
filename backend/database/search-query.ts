@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * E-Hentai style advanced search query parsing.
  *
@@ -24,8 +23,49 @@
  * `require`s and of anything Node-only, or the browser bundle breaks.
  */
 
+/** Canonical field a term can carry; `null` means "every metadata field". */
+export type SearchField =
+  | 'circle'
+  | 'tag'
+  | 'va'
+  | 'illustrator'
+  | 'script_writer'
+  | 'series'
+  | 'author'
+  | 'title'
+  | 'id';
+
+/** A term as the parser produces it. */
+export interface SearchTerm {
+  /** null for a free-text term; terms are ANDed by the caller. */
+  field: SearchField | null;
+  /** The value with underscores already turned into spaces. */
+  value: string;
+  /** The value before underscores become spaces — work codes live here. */
+  raw: string;
+  /** Match the whole name instead of a substring (`$`). */
+  exact: boolean;
+  /** Matched negatively (`-field:value`). */
+  negate: boolean;
+}
+
+/** A term the caller wants rendered; only `value` is required. */
+export interface SearchTermInput {
+  field: SearchField | null;
+  value: string;
+  exact?: boolean;
+  negate?: boolean;
+}
+
+/** How one canonical field maps onto its name table and work link table. */
+export interface RelationField {
+  nameTable: string;
+  relTable: string;
+  key: string;
+}
+
 /** Accepted namespaces (lower-cased) → canonical field name. */
-const FIELD_ALIASES = {
+export const FIELD_ALIASES: Record<string, SearchField> = {
   circle: 'circle', group: 'circle',
   tag: 'tag', tags: 'tag',
   va: 'va', cv: 'va', voice: 'va',
@@ -39,7 +79,7 @@ const FIELD_ALIASES = {
 };
 
 /** Canonical field → the tables that link a work to that name. */
-const RELATION_FIELDS = {
+export const RELATION_FIELDS: Partial<Record<SearchField, RelationField>> = {
   tag: { nameTable: 't_tag', relTable: 'r_tag_work', key: 'tag_id' },
   va: { nameTable: 't_va', relTable: 'r_va_work', key: 'va_id' },
   illustrator: { nameTable: 't_illustrator', relTable: 'r_illustrator_work', key: 'illustrator_id' },
@@ -48,19 +88,16 @@ const RELATION_FIELDS = {
   author: { nameTable: 't_author', relTable: 'r_author_work', key: 'author_id' },
 };
 
-const isSpace = (char) => char === undefined || /\s/.test(char);
+const isSpace = (char: string | undefined): boolean => char === undefined || /\s/.test(char);
 
 /**
  * Split a raw search box string into filter terms.
- * @param {String} filter
- * @returns {Array<{field: ?String, value: String, raw: String, exact: Boolean, negate: Boolean}>}
- *          `field` is null for a free-text term; terms are ANDed by the caller.
- *          `raw` is the value before underscores become spaces — work codes
- *          such as `d_123456` have to be read off that one.
+ * @param filter
+ * @returns terms, ANDed by the caller.
  */
-const parseSearchQuery = (filter) => {
+const parseSearchQuery = (filter: unknown): SearchTerm[] => {
   const input = String(filter || '');
-  const terms = [];
+  const terms: SearchTerm[] = [];
   let i = 0;
 
   while (i < input.length) {
@@ -72,14 +109,14 @@ const parseSearchQuery = (filter) => {
       i += 1;
     }
 
-    let field = null;
+    let field: SearchField | null = null;
     const prefix = /^([A-Za-z_]+):/.exec(input.slice(i));
     if (prefix && FIELD_ALIASES[prefix[1].toLowerCase()]) {
       field = FIELD_ALIASES[prefix[1].toLowerCase()];
       i += prefix[0].length;
     }
 
-    let value;
+    let value: string;
     const quoted = input[i] === '"';
     if (quoted) {
       const end = input.indexOf('"', i + 1);
@@ -116,13 +153,11 @@ const parseSearchQuery = (filter) => {
  *
  * The value is always quoted, so it survives verbatim: the bare form rewrites
  * '_' as a space, which would silently retarget any name containing one.
- * @param {{field: ?String, value: String, exact: Boolean, negate: Boolean}} term
- * @returns {String}
  */
-const formatSearchTerm = ({ field, value, exact = false, negate = false }) =>
+const formatSearchTerm = ({ field, value, exact = false, negate = false }: SearchTermInput): string =>
   `${negate ? '-' : ''}${field ? `${field}:` : ''}"${value}${exact ? '$' : ''}"`;
 
 /** Join terms back into a single search box string. */
-const formatSearchQuery = (terms) => terms.map(formatSearchTerm).join(' ');
+const formatSearchQuery = (terms: readonly SearchTermInput[]): string => terms.map(formatSearchTerm).join(' ');
 
-export { parseSearchQuery, formatSearchTerm, formatSearchQuery, FIELD_ALIASES, RELATION_FIELDS };
+export { parseSearchQuery, formatSearchTerm, formatSearchQuery };

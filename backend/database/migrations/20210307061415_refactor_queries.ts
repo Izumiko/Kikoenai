@@ -1,5 +1,6 @@
-// @ts-nocheck
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   await knex.raw(`
     CREATE VIEW IF NOT EXISTS staticMetadata AS
     SELECT baseQueryWithVA.*,
@@ -36,6 +37,6 @@ export const up = async function(knex) {
 };
 
 // Will break most of the queries! You will need to switch to an earlier version of code.
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   knex.raw(`DROP VIEW IF EXISTS staticMetadata`);
 };

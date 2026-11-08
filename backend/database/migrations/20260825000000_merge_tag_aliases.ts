@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Merge t_tag rows split apart by a DLsite genre rename.
 //
 // Tag identity is nameToUUID(name), so when DLsite renames a genre the new name
@@ -13,12 +12,14 @@
 // separate genre id from the つるぺた it renamed ロリ to, so works could carry
 // both; here they are deliberately treated as one tag.
 
+import type { Knex } from 'knex';
+
 import { nameToUUID } from '../../scraper/utils.ts';
 import { tagAliases } from '../../scraper/tag-aliases.ts';
 
-export const up = async function(knex) {
+export const up = async (knex: Knex): Promise<void> => {
   await knex.transaction(async (trx) => {
-    for (const [variant, canonical] of Object.entries(tagAliases)) {
+    for (const [variant, canonical] of Object.entries(tagAliases as Record<string, string>)) {
       const variantId = nameToUUID(variant);
       const canonicalId = nameToUUID(canonical);
       if (variantId === canonicalId) continue;
@@ -44,4 +45,4 @@ export const up = async function(knex) {
 // Irreversible: which work was tagged with which name is not recorded anywhere
 // once the variant rows are gone. Re-scanning restores nothing either, since
 // resolveTagLabel now canonicalizes on write.
-export const down = async function() {};
+export const down = async (): Promise<void> => {};

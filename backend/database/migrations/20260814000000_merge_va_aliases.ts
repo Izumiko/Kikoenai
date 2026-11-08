@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Merge t_va rows that are the same VA registered under several spellings.
 //
 // Label identity is nameToUUID(name), so a VA who registered as 乙倉ゅい,
@@ -7,12 +6,14 @@
 // the canonical name (resolveVaLabel keeps future scans folded); this migration
 // repoints the rows already in the DB.
 
+import type { Knex } from 'knex';
+
 import { nameToUUID } from '../../scraper/utils.ts';
 import { vaAliases } from '../../scraper/va-aliases.ts';
 
-export const up = async function(knex) {
+export const up = async (knex: Knex): Promise<void> => {
   await knex.transaction(async (trx) => {
-    for (const [variant, canonical] of Object.entries(vaAliases)) {
+    for (const [variant, canonical] of Object.entries(vaAliases as Record<string, string>)) {
       const variantId = nameToUUID(variant);
       const canonicalId = nameToUUID(canonical);
       if (variantId === canonicalId) continue;
@@ -38,4 +39,4 @@ export const up = async function(knex) {
 // Irreversible: which work belonged to which spelling is not recorded anywhere
 // once the variant rows are gone. Re-scanning restores nothing either, since
 // resolveVaLabel now canonicalizes on write.
-export const down = async function() {};
+export const down = async (): Promise<void> => {};

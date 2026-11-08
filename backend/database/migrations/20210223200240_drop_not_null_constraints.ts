@@ -1,7 +1,8 @@
-// @ts-nocheck
 // I forgot to change schema.js for db initialization
 // This migration tries to fix the inconsistency
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   try {
     await knex.raw('DROP INDEX IF EXISTS t_work_circle_id_release_dl_count_review_count_price_rate_average_2dp_index');
     await knex.raw('DROP INDEX IF EXISTS t_work_index');
@@ -41,6 +42,6 @@ export const up = async function(knex) {
 
 // Cannot be reverted
  
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
 
 };

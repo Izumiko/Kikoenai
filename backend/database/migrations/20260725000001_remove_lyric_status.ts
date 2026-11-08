@@ -1,5 +1,6 @@
-// @ts-nocheck
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   // Check if lyric_status column still exists (from closed-source db)
   const hasColumn = await knex.schema.hasColumn('t_work', 'lyric_status');
   if (hasColumn) {
@@ -50,11 +51,11 @@ export const up = async function(knex) {
   await createOrReplaceStaticMetadata(knex);
 };
 
-export const down = async function() {
+export const down = async (): Promise<void> => {
   console.log('Cannot revert: lyric_status column removal is irreversible.');
 };
 
-async function createOrReplaceStaticMetadata(knex) {
+async function createOrReplaceStaticMetadata(knex: Knex): Promise<void> {
   await knex.raw('DROP VIEW IF EXISTS staticMetadata');
   await knex.raw(`
     CREATE VIEW IF NOT EXISTS staticMetadata AS

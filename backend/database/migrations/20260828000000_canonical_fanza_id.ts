@@ -1,4 +1,5 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
+
 /**
  * Fanza work ids lose their underscore: `d_215444` → `d215444`.
  *
@@ -33,7 +34,7 @@ const WORK_ID_COLUMNS = [
  * @param {String} from - prefix to strip ('d_' or 'd')
  * @param {String} to - prefix to write in its place
  */
-const reprefix = async (knex, from, to) => {
+const reprefix = async (knex: Knex, from: string, to: string): Promise<void> => {
   // Foreign keys are ON in the app's knex config; t_work.id has to move before
   // the rows referencing it, and both halves have to land in one transaction.
   await knex.raw('PRAGMA foreign_keys=off');
@@ -41,8 +42,11 @@ const reprefix = async (knex, from, to) => {
     await knex.transaction(async (trx) => {
       for (const [table, column] of WORK_ID_COLUMNS) {
         if (!(await trx.schema.hasTable(table))) continue;
+        // whereRaw rather than `.where(raw, value)`: both compile to the same
+        // SQL and bindings (verified), but knex's typings stop accepting a raw
+        // update value after the Raw-first `.where` overload.
         const updated = await trx(table)
-          .where(trx.raw('substr(??, 1, ?)', [column, from.length]), from)
+          .whereRaw('substr(??, 1, ?) = ?', [column, from.length, from])
           .update({ [column]: trx.raw("? || substr(??, ?)", [to, column, from.length + 1]) });
         if (updated) console.log(`  ${table}.${column}: ${updated} Fanza id(s) rewritten`);
       }
@@ -52,6 +56,6 @@ const reprefix = async (knex, from, to) => {
   }
 };
 
-export const up = knex => reprefix(knex, 'd_', 'd');
+export const up = (knex: Knex): Promise<void> => reprefix(knex, 'd_', 'd');
 
-export const down = knex => reprefix(knex, 'd', 'd_');
+export const down = (knex: Knex): Promise<void> => reprefix(knex, 'd', 'd_');

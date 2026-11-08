@@ -1,6 +1,7 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
 
-export const up = async function(knex) {
+
+export const up = async (knex: Knex): Promise<void> => {
   await knex.schema.alterTable('t_work', function(table) {
     table.timestamps(true, true); // 时间戳created_at, updated_at 默认当前时间
   });
@@ -41,7 +42,7 @@ export const up = async function(knex) {
   `);
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   await knex.schema.alterTable('t_work', function(table) {
     table.dropColumn('updated_at'); // drop column
     table.dropColumn('created_at'); // drop column

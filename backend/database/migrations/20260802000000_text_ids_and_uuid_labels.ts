@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
 
 import { nameToUUID } from '../../scraper/utils.ts';
 
@@ -6,13 +6,13 @@ import { nameToUUID } from '../../scraper/utils.ts';
  * Format ID: pad DLsite numeric ids to RJ form (6 or 8 digits).
  * For string inputs (already in final form), pass through.
  */
-function formatID(id) {
+function formatID(id: string | number): string {
   if (typeof id === 'string') return id;
-  const n = parseInt(id, 10);
+  const n = parseInt(String(id), 10);
   return (n >= 1000000) ? `0${n}`.slice(-8) : `000000${n}`.slice(-6);
 }
 
-export const up = async function(knex) {
+export const up = async (knex: Knex): Promise<void> => {
   await knex.raw('PRAGMA foreign_keys=off');
   await knex.raw('PRAGMA ignore_check_constraints=on');
 
@@ -57,7 +57,7 @@ export const up = async function(knex) {
       table.text('rate_count_detail');
       table.text('rank');
       table.json('memo');
-      table.primary('id');
+      table.primary(['id']);
       table.index(['circle_id', 'release', 'dl_count', 'review_count', 'price', 'rate_average_2dp'], 't_work_index');
     });
 
@@ -93,7 +93,7 @@ export const up = async function(knex) {
     // them off), so link tables can contain rows pointing at deleted works or
     // labels. Those orphan rows are dropped here and counted for the log.
     let droppedLinks = 0;
-    const rebuildLinkTable = async (tableName, labelTable, labelCol, cascade) => {
+    const rebuildLinkTable = async (tableName: string, labelTable: string, labelCol: string, cascade: boolean): Promise<void> => {
       const labelIds = new Set((await trx(labelTable).select('id')).map((r) => String(r.id)));
       const oldRows = await trx(tableName).select('*');
       await trx.schema.dropTableIfExists(tableName);
@@ -207,7 +207,7 @@ export const up = async function(knex) {
     await trx.schema.createTable('t_circle_tmp', (table) => {
       table.string('id').notNullable();
       table.string('name').notNullable();
-      table.primary('id');
+      table.primary(['id']);
     });
     // Insert deduplicated by name (same name -> same UUID -> one row)
     const seenCircleNames = new Set();
@@ -235,7 +235,7 @@ export const up = async function(knex) {
     // --- t_tag / t_series ---
     // Labels with duplicate names merge into one UUID row; their link rows are
     // rebuilt with dedup so merged labels don't violate the composite PK.
-    const rebuildLabelTable = async (labelTable, linkTable, labelCol) => {
+    const rebuildLabelTable = async (labelTable: string, linkTable: string, labelCol: string): Promise<void> => {
       const oldLabels = await trx(labelTable).select('*');
       const nameToUuid = new Map();
       const oldIdToNewId = new Map();
@@ -248,7 +248,7 @@ export const up = async function(knex) {
       await trx.schema.createTable(`${labelTable}_tmp`, (table) => {
         table.string('id').notNullable();
         table.string('name').notNullable();
-        table.primary('id');
+        table.primary(['id']);
       });
       const seenNames = new Set();
       for (const l of oldLabels) {
@@ -305,7 +305,7 @@ export const up = async function(knex) {
   console.log('  Migration 20260802000000_text_ids_and_uuid_labels completed.');
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   // This is a destructive migration. Down is not supported.
   // To revert, restore from backup.
   console.warn('Down migration not implemented for 20260802000000_text_ids_and_uuid_labels');

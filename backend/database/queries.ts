@@ -1,48 +1,279 @@
-// @ts-nocheck
-
 import crypto from 'crypto';
+import type { Knex } from 'knex';
 import { nameToUUID } from '../scraper/utils.ts';
 import { canonicalizeTagName } from '../scraper/tag-aliases.ts';
 import { canonicalizeVaName } from '../scraper/va-aliases.ts';
 import { parseSearchQuery, RELATION_FIELDS } from './search-query.ts';
+import type { SearchTerm } from './search-query.ts';
 import { collectWorkImages } from '../filesystem/utils.ts';
+import type {
+  AuthorWorkRow,
+  DlsiteReviewRow,
+  HistoryRow,
+  IllustratorWorkRow,
+  PlayStateRow,
+  ReviewUserStateRow,
+  ScriptWriterWorkRow,
+  SeriesWorkRow,
+  TagWorkRow,
+  TrackProgressRow,
+  VaWorkRow,
+  WorkFileRow,
+  WorkListRow,
+  WorkRow,
+} from '../types/db.ts';
+
+/** A label reference as the scrapers and the client send it. */
+interface LabelInput {
+  id?: string;
+  name: string;
+}
+
+/** A label reference as it is stored inside the *Obj JSON columns. */
+interface LabelRef {
+  id: string;
+  name: string;
+}
+
+/** One sample image as `t_work.sample_images` stores it (JSON). */
+interface SampleImage {
+  url: string;
+  thumb?: string;
+  width?: number;
+  height?: number;
+  /** File name on disk, or null when the image was never downloaded. */
+  file?: string | null;
+}
+
+/** One block of the scraped 作品内容 stored in `t_work.description_parts` (JSON). */
+interface DescriptionPart {
+  type: string;
+  heading?: string;
+  images?: unknown[];
+  tracks?: Array<{ title: string; time?: string }>;
+}
+
+/** A written-out work metadata object: what the scrapers produce and hand to the DB. */
+interface WorkMetadata {
+  id: string;
+  title: string;
+  rootFolderName: string;
+  dir: string;
+  circle: LabelInput;
+  nsfw?: boolean | number | null;
+  release?: string | null;
+  dl_count?: number | null;
+  price?: number | null;
+  review_count?: number | null;
+  rate_count?: number | null;
+  rate_average_2dp?: number | null;
+  rate_count_detail?: unknown;
+  rank?: unknown;
+  description?: string | null;
+  descriptionParts?: DescriptionPart[] | null;
+  sampleImages?: SampleImage[] | null;
+  tags: LabelInput[];
+  vas: LabelInput[];
+  illustrators?: LabelInput[] | null;
+  scriptWriters?: LabelInput[] | null;
+  authors?: LabelInput[] | null;
+  series?: LabelInput | null;
+}
+
+/** One row of a batch-fetched label relation: the work it belongs to plus the label. */
+interface RelationNameRow {
+  work_id: string;
+  id: string;
+  name: string;
+}
+
+/** A play-history row joined onto a work row. */
+interface HistoryJoinRow extends Pick<HistoryRow, 'work_id' | 'state'> {
+  play_updated_at: string;
+}
+
+/** A works listing row joined with its circle name. */
+interface HistoryListRow extends WorkListRow {
+  state: string | null;
+  play_updated_at: string;
+  progress: string | null;
+}
+
+/** A works row with every relation assembled into a JSON string. */
+interface AssembledWorkRow extends WorkListRow {
+  circleObj: string;
+  tagObj: string;
+  vaObj: string;
+  illustratorObj: string;
+  scriptWriterObj: string;
+  seriesObj: string;
+  userRating?: number | null;
+  review_text?: string | null;
+  progress?: string | null;
+  user_name?: string;
+  /** Play history: the stored state JSON, after progress seconds were merged in. */
+  state?: string | null;
+  play_updated_at?: string;
+}
+
+/** The *Obj columns `pushDeduped` may write. */
+type RelationObjectKey = 'tagObj' | 'vaObj' | 'illustratorObj' | 'scriptWriterObj' | 'seriesObj';
+
+/** The client's stored playback state (`t_play_history.state`, JSON). */
+interface PlaybackState {
+  queue?: Array<{ trackId?: string }>;
+  index?: number;
+  seconds?: number;
+  secondsObservedAt?: string;
+  [key: string]: unknown;
+}
+
+/** One row of t_track_progress as the progress projections read it. */
+type TrackProgressSelectRow = Pick<TrackProgressRow, 'work_id' | 'track_key' | 'seconds' | 'completed' | 'updated_at'>;
+
+/** One entry of the map `trackProgressFor` returns. */
+interface TrackProgressHit {
+  seconds: number;
+  completed: boolean;
+  observedAt: string;
+}
+
+/** The flags `updateWorkMetadata` accepts. */
+interface UpdateWorkMetadataOptions {
+  includeVA?: boolean;
+  includeIllustrator?: boolean;
+  includeScriptWriter?: boolean;
+  includeAuthor?: boolean;
+  includeSeries?: boolean;
+  includeTags?: boolean;
+  includeNSFW?: boolean;
+  includeDescription?: boolean;
+  refreshAll?: boolean;
+  purgeTags?: boolean;
+}
+
+/** The body of an admin metadata edit (PUT /api/work/:id). */
+interface EditWorkMetadataInput {
+  title?: string;
+  nsfw?: boolean | number;
+  release?: string | null;
+  /** Circle name; resolved or created. */
+  circle: string;
+  tags: LabelInput[];
+  vas: LabelInput[];
+  illustrators: LabelInput[];
+  scriptWriters: LabelInput[];
+  series?: LabelInput | null;
+}
+
+/** Shared options of the works-listing queries. */
+interface WorksQueryOptions {
+  username?: string;
+  nsfw?: number;
+  order?: string;
+  sort?: string;
+  limit?: number;
+  offset?: number;
+  seed?: number;
+}
+
+interface WorksFilterQueryOptions extends WorksQueryOptions {
+  filter?: string;
+}
+
+/** Options of getWorksWithReviews. */
+interface WorksWithReviewsOptions {
+  username?: string;
+  limit?: number;
+  offset?: number;
+  orderBy?: string;
+  sortOption?: string;
+  filter?: string;
+}
+
+/** Options of getPlayHistory. */
+interface PlayHistoryQueryOptions {
+  username?: string;
+  sortOption?: string;
+  limit?: number;
+  excludeFinished?: string;
+  offset?: number;
+}
+
+/** One normalized review as scrapeWorkReviewsFromDLsite returns it. */
+interface DlsiteReviewInput {
+  id: string;
+  reviewerId?: string | null;
+  reviewerName?: string | null;
+  rate?: number | null;
+  title?: string | null;
+  text?: string | null;
+  spoiler?: boolean | number | null;
+  recommend?: boolean | number | null;
+  isPurchased?: boolean | number | null;
+  goodReview?: number | null;
+  badReview?: number | null;
+  genres?: Array<{ id?: string; name: string }>;
+  entryDate?: string | null;
+  registDate?: string | null;
+}
+
+/** A `t_work_file` row as it is written back. */
+interface WorkFileWriteRow {
+  work_id: string;
+  rel_path: string;
+  duration?: number | null;
+  mtime?: number | null;
+  track_title?: string | null;
+}
+
+/** A user row as the user queries take it. */
+interface UserInput {
+  name: string;
+  password: string;
+  group: string;
+}
+
+/** A knex transaction provider, as some helpers pass one in. */
+type TrxProvider = () => Promise<Knex.Transaction>;
 
 /**
  * Format ID: pad DLsite numeric ids to RJ form (6 or 8 digits).
  * For string inputs (already in final form), pass through.
  */
-function formatID(id) {
+function formatID(id: string | number): string {
   if (typeof id === 'string') return id;
-  const n = parseInt(id, 10);
+  const n = parseInt(String(id), 10);
   return (n >= 1000000) ? `0${n}`.slice(-8) : `000000${n}`.slice(-6);
 }
 
 /**
  * Read one of the JSON-encoded t_work columns, tolerating null and garbage.
- * @param {String|null} value
- * @param {*} [fallback=[]]
+ * The caller names the column's stored shape; the parse itself is unchecked.
  */
-const parseJsonColumn = (value, fallback = []) => {
+function parseJsonColumn<T>(value: string | null | undefined, fallback: T = [] as T): T {
   if (!value) return fallback;
   try {
-    return JSON.parse(value);
+    return JSON.parse(value) as T;
   } catch {
     return fallback;
   }
-};
+}
 
 /**
  * Factory that binds every DB query function to a specific knex instance.
  * Functions are copied verbatim from the original singleton-bound versions in
  * db.js so the generated SQL is byte-identical.
- * @param {import('knex').Knex} knex
- * @returns {Object} Query functions bound to the given knex.
+ * The returned object's type is inferred, so db.ts can spread it.
  */
-const makeQueries = (knex) => {
+const makeQueries = (knex: Knex) => {
   /**
-   * @param {Number} nsfw 0所有年龄分级，1仅全年龄，2仅十八禁
+   * @param nsfw 0所有年龄分级，1仅全年龄，2仅十八禁
    */
-  function nsfwFilter(nsfw, knexQuery) {
+  function nsfwFilter<TRecord extends {} = any, TResult = any>(
+    nsfw: number,
+    knexQuery: Knex.QueryBuilder<TRecord, TResult>,
+  ): Knex.QueryBuilder<TRecord, TResult> {
     switch(nsfw) {
       case 1: return knexQuery.where('nsfw', '=', false); // 全年龄
       case 2: return knexQuery.where('nsfw', '=', true); // 仅R18
@@ -53,12 +284,13 @@ const makeQueries = (knex) => {
 
   /**
    * Setter for track progress
-   * @param {String} username
-   * @param {{workId?: String, relPaths?: Array<String>}} selector
-   * @returns {Promise<Map>} `${workId}\u0000${relPath}` -> {seconds, completed, observedAt}
+   * @returns `${workId}\u0000${relPath}` -> {seconds, completed, observedAt}
    */
-  const trackProgressFor = async (username, { workId, relPaths } = {}) => {
-    const byKey = new Map();
+  const trackProgressFor = async (
+    username: string,
+    { workId, relPaths }: { workId?: string; relPaths?: string[] } = {},
+  ): Promise<Map<string, TrackProgressHit>> => {
+    const byKey = new Map<string, TrackProgressHit>();
     if (relPaths && !relPaths.length) return byKey;
 
     let query = knex('t_track_progress')
@@ -67,7 +299,8 @@ const makeQueries = (knex) => {
     if (workId !== undefined) query = query.andWhere('work_id', String(workId));
     if (relPaths) query = query.whereIn('track_key', relPaths);
 
-    for (const row of await query) {
+    const rows: TrackProgressSelectRow[] = await query;
+    for (const row of rows) {
       byKey.set(`${row.work_id}\u0000${row.track_key}`, {
         seconds: row.seconds,
         completed: !!row.completed,
@@ -77,20 +310,22 @@ const makeQueries = (knex) => {
     return byKey;
   };
 
-  const applyTrackProgressSeconds = async (username, rows) => {
-    const progressKey = (workId, trackKey) => `${workId}\u0000${trackKey}`;
-    const parsed = [];
+  const applyTrackProgressSeconds = async (username: string, rows: PlayStateRow[]): Promise<void> => {
+    const progressKey = (workId: string, trackKey: string): string => `${workId}\u0000${trackKey}`;
+    const parsed: Array<{ row: PlayStateRow; state: PlaybackState; relPath: string; key: string }> = [];
     for (const row of rows) {
       if (!row.state) continue;
       const workId = row.work_id !== undefined ? row.work_id : row.id;
       if (workId === undefined) continue;
-      let state;
+      let state: PlaybackState;
       try {
         state = JSON.parse(row.state);
       } catch {
         continue;
       }
-      const trackId = state.queue && state.queue[state.index] && state.queue[state.index].trackId;
+      // `index` may be absent in a stored row; the original lookup was
+      // `queue[undefined]`, which is undefined as well.
+      const trackId = state.queue && state.index !== undefined && state.queue[state.index] && state.queue[state.index].trackId;
       // A trackId is `workId/relPath`; track_key holds the relPath alone.
       const relPath = trackId && trackId.startsWith(`${workId}/`)
         ? trackId.slice(String(workId).length + 1)
@@ -116,20 +351,33 @@ const makeQueries = (knex) => {
    * script_writers, series) and optional user state for a set of work IDs,
    * then assemble into the JSON-string *Obj shape that normalize() expects.
    *
-   * @param {Array<Object>} coreRows - Rows from t_work ⋈ t_circle with core fields.
-   * @param {Object} [opts]
-   * @param {String} opts.username
-   * @param {Boolean} opts.reviewFields - also fetch review_text/progress/updated_at/user_name
-   * @param {Boolean} opts.historyFields - also fetch state/play_updated_at
-   * @returns {Promise<Array<Object>>} Assembled rows with *Obj JSON-string fields.
+   * @param coreRows - Rows from t_work ⋈ t_circle with core fields.
+   * @param opts.reviewFields - also fetch review_text/progress/updated_at/user_name
+   * @param opts.historyFields - also fetch state/play_updated_at
+   * @returns Assembled rows with *Obj JSON-string fields.
    */
-  async function assembleWorks(coreRows, { username = 'admin', reviewFields = false, historyFields = false } = {}) {
+  async function assembleWorks(
+    coreRows: WorkListRow[],
+    { username = 'admin', reviewFields = false, historyFields = false }: {
+      username?: string;
+      reviewFields?: boolean;
+      historyFields?: boolean;
+    } = {},
+  ): Promise<AssembledWorkRow[]> {
     if (coreRows.length === 0) return [];
 
     const ids = coreRows.map(r => r.id);
 
     // Batch-fetch static relations
-    const [tagRows, vaRows, illusRows, swRows, seriesRows, reviewRows, historyRows] = await Promise.all([
+    const [tagRows, vaRows, illusRows, swRows, seriesRows, reviewRows, historyRows]: [
+      RelationNameRow[],
+      RelationNameRow[],
+      RelationNameRow[],
+      RelationNameRow[],
+      RelationNameRow[],
+      ReviewUserStateRow[],
+      HistoryJoinRow[],
+    ] = await Promise.all([
       knex('r_tag_work').join('t_tag', 't_tag.id', 'r_tag_work.tag_id')
         .select('r_tag_work.work_id', 'r_tag_work.tag_id as id', 't_tag.name').whereIn('r_tag_work.work_id', ids),
       knex('r_va_work').join('t_va', 't_va.id', 'r_va_work.va_id')
@@ -154,9 +402,10 @@ const makeQueries = (knex) => {
     ]);
 
     // Build a Map from id -> assembled row
-    const byId = new Map();
+    const byId = new Map<string, AssembledWorkRow>();
     for (const row of coreRows) {
-      const a = { ...row };
+      // The *Obj columns are added just below; the row itself is a listing row.
+      const a = { ...row } as AssembledWorkRow;
       a.circleObj = JSON.stringify({ id: row.circle_id, name: row.name });
       a.tagObj = JSON.stringify({ tags: [] });
       a.vaObj = JSON.stringify({ vas: [] });
@@ -167,12 +416,12 @@ const makeQueries = (knex) => {
     }
 
     // Helper: push a relation item into a work's *Obj array, deduping by id
-    const pushDeduped = (workId, objKey, subKey, item) => {
+    const pushDeduped = (workId: string, objKey: RelationObjectKey, subKey: string, item: LabelRef): void => {
       const w = byId.get(workId);
       if (!w) return;
       const arr = JSON.parse(w[objKey])[subKey];
       // Dedupe by id (mimics json_group_array(DISTINCT ...))
-      if (!arr.some(existing => existing.id === item.id)) {
+      if (!arr.some((existing: LabelRef) => existing.id === item.id)) {
         arr.push(item);
       }
       w[objKey] = JSON.stringify({ [subKey]: arr });
@@ -207,18 +456,15 @@ const makeQueries = (knex) => {
     }
 
     // Return in the same order as coreRows
-    return coreRows.map(r => byId.get(r.id));
+    return coreRows.map(r => byId.get(r.id)!);
   }
 
   /**
    * Unified label resolver: resolve or create a label by name using nameToUUID.
    * Works for all label tables: t_circle, t_tag, t_va, t_illustrator, t_script_writer, t_series.
-   * @param {import('knex').Knex.Transaction} trx
-   * @param {String} tableName
-   * @param {String} name
-   * @returns {Promise<String>} UUID id
+   * @returns UUID id
    */
-  const resolveLabel = async (trx, tableName, name) => {
+  const resolveLabel = async (trx: Knex.Transaction, tableName: string, name: string): Promise<string> => {
     const id = nameToUUID(name);
     await trx.raw('INSERT OR IGNORE INTO ??(id, name) VALUES (?, ?)', [tableName, id, name]);
     return id;
@@ -227,20 +473,19 @@ const makeQueries = (knex) => {
   // Tag-specific resolver: canonicalizes the scraped name (new → old) before
   // UUID resolution so a DLsite rename folds onto the existing t_tag row
   // instead of splitting into two. See scraper/tag-aliases.json.
-  const resolveTagLabel = async (trx, name) =>
+  const resolveTagLabel = async (trx: Knex.Transaction, name: string): Promise<string> =>
     resolveLabel(trx, 't_tag', canonicalizeTagName(name));
 
   // VA-specific resolver: canonicalizes the scraped name (variant → canonical)
   // so a VA registered under several spellings folds onto one t_va row.
   // See scraper/va-aliases.json.
-  const resolveVaLabel = async (trx, name) =>
+  const resolveVaLabel = async (trx: Knex.Transaction, name: string): Promise<string> =>
     resolveLabel(trx, 't_va', canonicalizeVaName(name));
 
   /**
    * Takes a work metadata object and inserts it into the database.
-   * @param {Object} work Work object.
    */
-  const insertWorkMetadata = async work => knex.transaction(async (trx) => {
+  const insertWorkMetadata = async (work: WorkMetadata) => knex.transaction(async (trx) => {
     // Resolve circle UUID by name
     const circleId = await resolveLabel(trx, 't_circle', work.circle.name);
 
@@ -310,9 +555,8 @@ const makeQueries = (knex) => {
 
   /**
    * Update work's metadata
-   * @param {Object} work Work object.
    */
-  const updateWorkMetadata = (work, options = {}) => knex.transaction(async (trx) => {
+  const updateWorkMetadata = (work: WorkMetadata, options: UpdateWorkMetadataOptions = {}) => knex.transaction(async (trx) => {
     await trx('t_work')
       .where('id', '=', work.id)
       .update({
@@ -403,7 +647,7 @@ const makeQueries = (knex) => {
     // Description and sample image list: the description is overwritten
     // The image list is merged instead
     if (options.includeDescription || options.refreshAll) {
-      const patch = {};
+      const patch: Record<string, unknown> = {};
       if (work.description) patch.description = work.description;
       if (work.descriptionParts && work.descriptionParts.length) {
         patch.description_parts = JSON.stringify(work.descriptionParts);
@@ -412,11 +656,11 @@ const makeQueries = (knex) => {
         // Rebuilt from the fresh scrape, but every `file` already on disk is
         // carried over
         const stored = await trx('t_work').select('sample_images').where('id', work.id).first();
-        const fileByUrl = {};
-        for (const image of parseJsonColumn(stored && stored.sample_images)) {
+        const fileByUrl: Record<string, string> = {};
+        for (const image of parseJsonColumn<SampleImage[]>(stored && stored.sample_images)) {
           if (image && image.url && image.file) fileByUrl[image.url] = image.file;
         }
-        patch.sample_images = JSON.stringify(collectWorkImages(work).map(image => ({
+        patch.sample_images = JSON.stringify(collectWorkImages(work).map((image: SampleImage) => ({
           ...image,
           file: fileByUrl[image.url] || null,
         })));
@@ -428,8 +672,8 @@ const makeQueries = (knex) => {
 
     if (options.refreshAll) {
       // Gap-fill: only update title/nsfw/release if the current value is empty/null
-      const cur = await trx('t_work').select('title', 'nsfw', 'release').where('id', work.id).first();
-      const patch = {};
+      const cur: Pick<WorkRow, 'title' | 'nsfw' | 'release'> = await trx('t_work').select('title', 'nsfw', 'release').where('id', work.id).first();
+      const patch: Record<string, unknown> = {};
       if (!cur.title && work.title) patch.title = work.title;
       if (cur.nsfw == null && work.nsfw != null) patch.nsfw = work.nsfw;
       if (!cur.release && work.release) patch.release = work.release;
@@ -443,22 +687,13 @@ const makeQueries = (knex) => {
    * Manually edit a work's descriptive metadata (full replace semantics).
    * Runs in one transaction. Updates t_work, resolves-or-creates labels,
    * replaces relational links, and cleans up orphaned labels.
-   * @param {String} workId
-   * @param {Object} data
-   * @param {String} data.title
-   * @param {Boolean} data.nsfw
-   * @param {String} data.release
-   * @param {String} data.circle - circle name
-   * @param {Array<{id?:String, name:String}>} data.tags
-   * @param {Array<{id?:String, name:String}>} data.vas
-   * @param {Array<{id?:String, name:String}>} data.illustrators
-   * @param {Array<{id?:String, name:String}>} data.scriptWriters
-   * @param {Object|null} data.series - {id?:String, name:String} or null
-   * @returns {Promise<void>}
+   * @param workId
+   * @param data
+   * @returns
    */
-  const editWorkMetadata = async (workId, data) => knex.transaction(async (trx) => {
+  const editWorkMetadata = async (workId: string, data: EditWorkMetadataInput): Promise<void> => knex.transaction(async (trx) => {
     // 1. Update t_work core fields
-    const patch = {};
+    const patch: Record<string, unknown> = {};
     if (data.title !== undefined) patch.title = data.title;
     if (data.nsfw !== undefined) patch.nsfw = data.nsfw;
     if (data.release !== undefined) patch.release = data.release;
@@ -467,16 +702,16 @@ const makeQueries = (knex) => {
     }
 
     // 2. Circle
-    const prevWork = await trx('t_work').select('circle_id').where('id', workId).first();
+    const prevWork: Pick<WorkRow, 'circle_id'> = await trx('t_work').select('circle_id').where('id', workId).first();
     const prevCircleId = prevWork ? prevWork.circle_id : null;
     const newCircleId = await resolveLabel(trx, 't_circle', data.circle);
     await trx('t_work').where('id', workId).update({ circle_id: newCircleId });
 
     // 3. Tags
-    const prevTagRows = await trx('r_tag_work').select('tag_id').where('work_id', workId);
+    const prevTagRows: Array<{ tag_id: string }> = await trx('r_tag_work').select('tag_id').where('work_id', workId);
     const prevTagIds = prevTagRows.map(r => r.tag_id);
     await trx('r_tag_work').where('work_id', workId).del();
-    const newTagIds = [];
+    const newTagIds: string[] = [];
     for (const tag of data.tags) {
       const id = await resolveTagLabel(trx, tag.name);
       newTagIds.push(id);
@@ -485,10 +720,10 @@ const makeQueries = (knex) => {
     const removedTagIds = prevTagIds.filter(id => !newTagIds.includes(id));
 
     // 4. VAs
-    const prevVaRows = await trx('r_va_work').select('va_id').where('work_id', workId);
+    const prevVaRows: Array<{ va_id: string }> = await trx('r_va_work').select('va_id').where('work_id', workId);
     const prevVaIds = prevVaRows.map(r => r.va_id);
     await trx('r_va_work').where('work_id', workId).del();
-    const newVaIds = [];
+    const newVaIds: string[] = [];
     for (const va of data.vas) {
       const id = await resolveVaLabel(trx, va.name);
       newVaIds.push(id);
@@ -497,10 +732,10 @@ const makeQueries = (knex) => {
     const removedVaIds = prevVaIds.filter(id => !newVaIds.includes(id));
 
     // 5. Illustrators
-    const prevIllustratorRows = await trx('r_illustrator_work').select('illustrator_id').where('work_id', workId);
+    const prevIllustratorRows: Array<{ illustrator_id: string }> = await trx('r_illustrator_work').select('illustrator_id').where('work_id', workId);
     const prevIllustratorIds = prevIllustratorRows.map(r => r.illustrator_id);
     await trx('r_illustrator_work').where('work_id', workId).del();
-    const newIllustratorIds = [];
+    const newIllustratorIds: string[] = [];
     for (const illus of data.illustrators) {
       const id = await resolveLabel(trx, 't_illustrator', illus.name);
       newIllustratorIds.push(id);
@@ -509,10 +744,10 @@ const makeQueries = (knex) => {
     const removedIllustratorIds = prevIllustratorIds.filter(id => !newIllustratorIds.includes(id));
 
     // 6. Script writers
-    const prevSwRows = await trx('r_script_writer_work').select('script_writer_id').where('work_id', workId);
+    const prevSwRows: Array<{ script_writer_id: string }> = await trx('r_script_writer_work').select('script_writer_id').where('work_id', workId);
     const prevSwIds = prevSwRows.map(r => r.script_writer_id);
     await trx('r_script_writer_work').where('work_id', workId).del();
-    const newSwIds = [];
+    const newSwIds: string[] = [];
     for (const sw of data.scriptWriters) {
       const id = await resolveLabel(trx, 't_script_writer', sw.name);
       newSwIds.push(id);
@@ -521,7 +756,7 @@ const makeQueries = (knex) => {
     const removedSwIds = prevSwIds.filter(id => !newSwIds.includes(id));
 
     // 7. Series
-    const prevSeriesRows = await trx('r_series_work').select('series_id').where('work_id', workId);
+    const prevSeriesRows: Array<{ series_id: string }> = await trx('r_series_work').select('series_id').where('work_id', workId);
     const prevSeriesIds = prevSeriesRows.map(r => r.series_id);
     await trx('r_series_work').where('work_id', workId).del();
     let removedSeriesIds = prevSeriesIds;
@@ -532,7 +767,7 @@ const makeQueries = (knex) => {
     }
 
     // 8. Cleanup orphans
-    const trxProvider = () => Promise.resolve(trx);
+    const trxProvider: TrxProvider = () => Promise.resolve(trx);
     await cleanupOrphans(
       trxProvider,
       prevCircleId,
@@ -547,10 +782,10 @@ const makeQueries = (knex) => {
   /**
    * Fetches metadata for a specific work id.
    * Returns an Array of length 1 (compatible with normalize()).
-   * @param {String} id Work identifier.
-   * @param {String} username 'admin' or other usernames for current user
+   * @param id Work identifier.
+   * @param username 'admin' or other usernames for current user
    */
-  const getWorkMetadata = async (id, username) => {
+  const getWorkMetadata = async (id: string, username: string): Promise<AssembledWorkRow[]> => {
     const row = await knex('t_work')
       .join('t_circle', 't_circle.id', 't_work.circle_id')
       .select(
@@ -565,36 +800,46 @@ const makeQueries = (knex) => {
 
     if (!row) throw new Error(`There is no work with id ${id} in the database.`);
 
-    const assembled = await assembleWorks([row], { username, reviewFields: true, historyFields: true });
+    const assembled = await assembleWorks([row as WorkListRow], { username, reviewFields: true, historyFields: true });
     return assembled;
   };
 
   /**
    * Tests if the given circle, tags, VAs, illustrators, script writers and series are orphans and if so, removes them.
-   * @param {*} trx Knex transaction object.
-   * @param {*} circle Circle id to check.
-   * @param {*} tags Array of tag ids to check.
-   * @param {*} vas Array of VA ids to check.
-   * @param {*} illustrators Array of illustrator ids to check.
-   * @param {*} scriptWriters Array of script writer ids to check.
-   * @param {*} series Array of series ids to check.
-   * @param {*} authors Array of author ids to check.
+   * @param trxProvider Knex transaction provider.
+   * @param circle Circle id to check.
+   * @param tags Array of tag ids to check.
+   * @param vas Array of VA ids to check.
+   * @param illustrators Array of illustrator ids to check.
+   * @param scriptWriters Array of script writer ids to check.
+   * @param series Array of series ids to check.
+   * @param authors Array of author ids to check.
    */
-  const cleanupOrphans = async (trxProvider, circle, tags, vas, illustrators = [], scriptWriters = [], series = [], authors = [])  => {
+  const cleanupOrphans = async (
+    trxProvider: TrxProvider,
+    circle: string | null,
+    tags: string[],
+    vas: string[],
+    illustrators: string[] = [],
+    scriptWriters: string[] = [],
+    series: string[] = [],
+    authors: string[] = [],
+  ): Promise<void> => {
     const trx = await trxProvider();
-    const getCount = (tableName, colName, colValue) => new Promise((resolveCount, rejectCount) => {
+    const getCount = (tableName: string, colName: string, colValue: string | null): Promise<number> => new Promise<number>((resolveCount, rejectCount) => {
       trx(tableName)
         .select(colName)
         .where(colName, '=', colValue)
         .count()
         .first()
-        .then(res => res['count(*)'])
+        .then(res => res!['count(*)'] as number)
         .then(count => resolveCount(count))
         .catch(err => rejectCount(err));
     });
 
-    const promises = [];
-    promises.push(new Promise((resolveCircle, rejectCircle) => {
+    // A mix of promises and (thenable) knex builders, awaited together below.
+    const promises: Array<Promise<unknown> | Knex.QueryBuilder> = [];
+    promises.push(new Promise<void>((resolveCircle, rejectCircle) => {
       getCount('t_work', 'circle_id', circle)
         .then((count) => {
           if (count === 0) {
@@ -692,18 +937,18 @@ const makeQueries = (knex) => {
 
   /**
    * Removes a work and then its orphaned circles, tags & VAs from the database.
-   * @param {String} id Work id.
+   * @param id Work id.
    */
-  const removeWork = async (id, trxProvider) => {
+  const removeWork = async (id: string, trxProvider: TrxProvider): Promise<void> => {
     const trx = await trxProvider();
     // Save circle, tags, VAs, illustrators, script writers and series to array for later testing
-      const circle = await trx('t_work').select('circle_id').where('id', '=', id).first();
-      const tags = await trx('r_tag_work').select('tag_id').where('work_id', '=', id);
-      const vas = await trx('r_va_work').select('va_id').where('work_id', '=', id);
-      const illustrators = await trx('r_illustrator_work').select('illustrator_id').where('work_id', '=', id);
-      const scriptWriters = await trx('r_script_writer_work').select('script_writer_id').where('work_id', '=', id);
-      const series = await trx('r_series_work').select('series_id').where('work_id', '=', id);
-      const authors = await trx('r_author_work').select('author_id').where('work_id', '=', id);
+      const circle: Pick<WorkRow, 'circle_id'> = await trx('t_work').select('circle_id').where('id', '=', id).first();
+      const tags: Array<Pick<TagWorkRow, 'tag_id'>> = await trx('r_tag_work').select('tag_id').where('work_id', '=', id);
+      const vas: Array<Pick<VaWorkRow, 'va_id'>> = await trx('r_va_work').select('va_id').where('work_id', '=', id);
+      const illustrators: Array<Pick<IllustratorWorkRow, 'illustrator_id'>> = await trx('r_illustrator_work').select('illustrator_id').where('work_id', '=', id);
+      const scriptWriters: Array<Pick<ScriptWriterWorkRow, 'script_writer_id'>> = await trx('r_script_writer_work').select('script_writer_id').where('work_id', '=', id);
+      const series: Array<Pick<SeriesWorkRow, 'series_id'>> = await trx('r_series_work').select('series_id').where('work_id', '=', id);
+      const authors: Array<Pick<AuthorWorkRow, 'author_id'>> = await trx('r_author_work').select('author_id').where('work_id', '=', id);
 
       await trx('t_play_history').del().where('work_id', '=', id);
       await trx('r_tag_work').del().where('work_id', '=', id);
@@ -730,17 +975,13 @@ const makeQueries = (knex) => {
   /**
    * Returns a page of the whole library. Label filtering goes through
    * getWorksByFilter, which is the only filter mechanism.
-   * @param {Object} opts
-   * @param {String} [opts.username='']
-   * @param {Number} [opts.nsfw=0] - 0=all, 1=全年龄, 2=R18
-   * @param {String} [opts.order='release'] - sort column; 'rating' for userRating; 'random'/'betterRandom'
-   * @param {String} [opts.sort='desc']
-   * @param {Number} [opts.limit] - page size; omit for all rows
-   * @param {Number} [opts.offset]
-   * @param {Number} [opts.seed] - shuffle seed for random order
-   * @returns {Promise<{works: Object[], totalCount: Array<{count: number}>}>}
+   * @param opts.order - sort column; 'rating' for userRating; 'random'/'betterRandom'
+   * @param opts.limit - page size; omit for all rows
+   * @param opts.seed - shuffle seed for random order
    */
-  const getWorksBy = async ({username = '', nsfw = 0, order = 'release', sort = 'desc', limit, offset, seed} = {}) => {
+  const getWorksBy = async ({
+    username = '', nsfw = 0, order = 'release', sort = 'desc', limit, offset, seed,
+  }: WorksQueryOptions = {}): Promise<{ works: AssembledWorkRow[]; totalCount: Array<{ count: number }> }> => {
     // Build the core query (t_work ⋈ t_circle)
     let coreQ = knex('t_work')
       .join('t_circle', 't_circle.id', 't_work.circle_id')
@@ -755,17 +996,18 @@ const makeQueries = (knex) => {
     // Apply nsfw filter
     coreQ = nsfwFilter(nsfw, coreQ);
 
-    // Compute totalCount
+    // Compute totalCount (SQLite returns COUNT() as a number; knex's type
+    // covers drivers that hand back a string)
     const countRow = await coreQ.clone().count('t_work.id as count').first();
-    const totalCount = [{ count: countRow ? countRow.count : 0 }];
+    const totalCount = [{ count: countRow ? countRow.count as number : 0 }];
 
     // Handle special order modes
-    let works = [];
+    let works: AssembledWorkRow[] = [];
     if (order === 'random') {
       const seedVal = seed || 7;
       const rows = await coreQ.clone()
         .orderBy(knex.raw('t_work.id % ?', seedVal))
-        .limit(limit)
+        .limit(limit!)
         .offset(offset || 0);
       works = await assembleWorks(rows, { username });
     } else if (order === 'betterRandom') {
@@ -805,7 +1047,7 @@ const makeQueries = (knex) => {
         // Batch-fetch user ratings for the page
         const ids = works.map(w => w.id);
         if (ids.length > 0) {
-          const ratings = await knex('t_review')
+          const ratings: Array<{ work_id: string; userRating: number | null }> = await knex('t_review')
             .select('work_id', 'rating as userRating')
             .where('user_name', username)
             .whereIn('work_id', ids);
@@ -837,10 +1079,9 @@ const makeQueries = (knex) => {
    * Subquery selecting the ids of the labels in `table` whose name matches the
    * term. LIKE (not '=') even for an anchored term, so that matching stays
    * ASCII-case-insensitive the way substring matching already is.
-   * @param {String} table - 't_circle' | 't_tag' | ...
-   * @param {{value: String, exact: Boolean}} term
+   * @param table - 't_circle' | 't_tag' | ...
    */
-  const labelIdsMatching = (table, term) => knex(table).select('id')
+  const labelIdsMatching = (table: string, term: Pick<SearchTerm, 'value' | 'exact'>) => knex(table).select('id')
     .where('name', 'like', term.exact ? term.value : `%${term.value}%`);
 
   /**
@@ -855,9 +1096,9 @@ const makeQueries = (knex) => {
    * still matches as a substring, the way it always did (`d_215444.zip`). BJ
    * is checked before the bare-digit RJ fallback: the prefix is part of the
    * stored id and must not be discarded.
-   * @returns {Boolean} whether a code was recognised (and a clause applied).
+   * @returns whether a code was recognised (and a clause applied).
    */
-  const applyWorkIdText = (qb, text) => {
+  const applyWorkIdText = (qb: Knex.QueryBuilder, text: string): boolean => {
     const fanzaMatch = text.match(/^d_?(\d+)$/i) || text.match(/d_(\d+)/i);
     const booksMatch = text.match(/bj(\d{6,8})/i);
     const rjMatch = text.match(/(?:rj)?(\d{6,8})/i);
@@ -876,11 +1117,12 @@ const makeQueries = (knex) => {
   /**
    * Apply one parsed search term (see database/search-query.js) as a clause on
    * `qb`. Negation is handled by the caller, which wraps this in whereNot.
-   * @param {import('knex').Knex.QueryBuilder} qb
-   * @param {{field: ?String, value: String, exact: Boolean}} term
+   * @param qb
+   * @param term
    */
-  const applySearchTerm = (qb, term) => {
-    const relation = RELATION_FIELDS[term.field];
+  const applySearchTerm = (qb: Knex.QueryBuilder, term: SearchTerm): void => {
+    // A null field is the free-text term; it has no relation to look up.
+    const relation = term.field === null ? undefined : RELATION_FIELDS[term.field];
     if (relation) {
       qb.whereIn('t_work.id', knex(relation.relTable).select('work_id')
         .whereIn(relation.key, labelIdsMatching(relation.nameTable, term)));
@@ -903,8 +1145,8 @@ const makeQueries = (knex) => {
     if (applyWorkIdText(qb, term.raw)) return;
 
     const [tags, vas, illustrators, scriptWriters, series, authors] =
-      ['tag', 'va', 'illustrator', 'script_writer', 'series', 'author'].map((field) => {
-        const rel = RELATION_FIELDS[field];
+      (['tag', 'va', 'illustrator', 'script_writer', 'series', 'author'] as const).map((field) => {
+        const rel = RELATION_FIELDS[field]!;
         return knex(rel.relTable).select('work_id')
           .whereIn(rel.key, labelIdsMatching(rel.nameTable, term));
       });
@@ -914,7 +1156,9 @@ const makeQueries = (knex) => {
       .orWhereIn('t_work.id', tags.union([vas, illustrators, scriptWriters, series, authors]));
   };
 
-  const getWorksByFilter = async ({filter, username = 'admin', nsfw = 0, order = 'release', sort = 'desc', limit, offset, seed} = {}) => {
+  const getWorksByFilter = async ({
+    filter, username = 'admin', nsfw = 0, order = 'release', sort = 'desc', limit, offset, seed,
+  }: WorksFilterQueryOptions = {}): Promise<{ works: AssembledWorkRow[]; totalCount: Array<{ count: number }> }> => {
     let coreQ = knex('t_work')
       .join('t_circle', 't_circle.id', 't_work.circle_id')
       .select(
@@ -936,14 +1180,14 @@ const makeQueries = (knex) => {
     coreQ = nsfwFilter(nsfw, coreQ);
 
     const countRow = await coreQ.clone().count('t_work.id as count').first();
-    const totalCount = [{ count: countRow ? countRow.count : 0 }];
+    const totalCount = [{ count: countRow ? countRow.count as number : 0 }];
 
-    let works = [];
+    let works: AssembledWorkRow[] = [];
     if (order === 'random') {
       const seedVal = seed || 7;
       const rows = await coreQ.clone()
         .orderBy(knex.raw('t_work.id % ?', seedVal))
-        .limit(limit)
+        .limit(limit!)
         .offset(offset || 0);
       works = await assembleWorks(rows, { username });
     } else {
@@ -973,7 +1217,7 @@ const makeQueries = (knex) => {
       if (order !== 'rating') {
         const ids = works.map(w => w.id);
         if (ids.length > 0) {
-          const ratings = await knex('t_review')
+          const ratings: Array<{ work_id: string; userRating: number | null }> = await knex('t_review')
             .select('work_id', 'rating as userRating')
             .where('user_name', username)
             .whereIn('work_id', ids);
@@ -990,9 +1234,9 @@ const makeQueries = (knex) => {
 
   /**
    * 获取所有社团/标签/声优的元数据列表
-   * @param {Starting} field ['circle', 'tag', 'va'] 中的一个
+   * @param field ['circle', 'tag', 'va'] 中的一个
    */
-  const getLabels = (field) => {
+  const getLabels = (field: string) => {
     if (field === 'circle') {
       return knex('t_work')
         .join(`t_${field}`, `${field}_id`, '=', `t_${field}.id`)
@@ -1011,9 +1255,8 @@ const makeQueries = (knex) => {
 
   /**
    * 创建一个新用户
-   * @param {Object} user User object.
    */
-  const createUser = user => knex.transaction(trx => trx('t_user')
+  const createUser = (user: UserInput) => knex.transaction(trx => trx('t_user')
     .where('name', '=', user.name)
     .first()
     .then((res) => {
@@ -1026,10 +1269,9 @@ const makeQueries = (knex) => {
 
   /**
    * 更新用户密码
-   * @param {Object} user User object.
-   * @param {String} newPassword new password
+   * @param newPassword new password
    */
-  const updateUserPassword = (user, newPassword) => knex.transaction(trx => trx('t_user')
+  const updateUserPassword = (user: UserInput, newPassword: string) => knex.transaction(trx => trx('t_user')
     .where('name', '=', user.name)
     .first()
     .then((res) => {
@@ -1045,9 +1287,8 @@ const makeQueries = (knex) => {
 
   /**
    * 重置用户密码为 "password"
-   * @param {Object} user User object.
    */
-  const resetUserPassword = (user) => knex.transaction(trx => trx('t_user')
+  const resetUserPassword = (user: UserInput) => knex.transaction(trx => trx('t_user')
     .where('name', '=', user.name)
     .first()
     .then((res) => {
@@ -1063,9 +1304,8 @@ const makeQueries = (knex) => {
 
   /**
    * 删除用户
-   * @param {Object} user User object.
    */
-  const deleteUser = users => knex.transaction(trx => trx('t_user')
+  const deleteUser = (users: UserInput[]) => knex.transaction(trx => trx('t_user')
     .where('name', 'in', users.map(user => user.name))
     .del());
 
@@ -1073,7 +1313,16 @@ const makeQueries = (knex) => {
   // autoMark: when progressOnly=true, only writes/inserts progress='listened' if the
   // existing progress (if any) is not in the terminal set ('listened','replay','postponed').
   // This prevents auto-marking from overwriting an explicit user state.
-  const updateUserReview = async (username, workid, rating, review_text = '', progress = '', starOnly = true, progressOnly = false, autoMark = false) => knex.transaction(async(trx) => {
+  const updateUserReview = async (
+    username: string,
+    workid: string,
+    rating: number | null,
+    review_text = '',
+    progress: string | null = '',
+    starOnly = true,
+    progressOnly = false,
+    autoMark = false,
+  ) => knex.transaction(async(trx) => {
       // UPSERT
       if (starOnly) {
         await trx.raw('UPDATE t_review SET rating = ?, updated_at = CURRENT_TIMESTAMP WHERE user_name = ? AND work_id = ?;', [rating, username, workid]);
@@ -1100,7 +1349,7 @@ const makeQueries = (knex) => {
   });
 
   // 删除星标、评语及进度
-  const deleteUserReview = (username, workid) => knex.transaction(trx => trx('t_review')
+  const deleteUserReview = (username: string, workid: string) => knex.transaction(trx => trx('t_review')
     .where('user_name', '=', username)
     .andWhere('work_id', '=', workid)
     .del());
@@ -1109,8 +1358,9 @@ const makeQueries = (knex) => {
   // 如果该行除 progress 外没有评分也没有评论（例如仅由自动标记创建的 rating-null 行），
   // 则整行删除，避免留下全 NULL 的空行。
   // 没有对应行时为 no-op。
-  const resetUserProgress = async (username, workid) => knex.transaction(async (trx) => {
-    const rows = await trx.raw('SELECT rating, review_text FROM t_review WHERE user_name = ? AND work_id = ?;', [username, workid]);
+  const resetUserProgress = async (username: string, workid: string) => knex.transaction(async (trx) => {
+    const rows: Array<{ rating: number | null; review_text: string | null }> =
+      await trx.raw('SELECT rating, review_text FROM t_review WHERE user_name = ? AND work_id = ?;', [username, workid]);
     const row = rows[0];
     if (!row) return; // 无行可清
     const hasRating = row.rating !== null && row.rating !== undefined;
@@ -1124,7 +1374,9 @@ const makeQueries = (knex) => {
   });
 
   // 读取星标及评语 + 作品元数据
-  const getWorksWithReviews = async ({username = '', limit = 1000, offset = 0, orderBy = 'release', sortOption = 'desc', filter} = {}) => {
+  const getWorksWithReviews = async ({
+    username = '', limit = 1000, offset = 0, orderBy = 'release', sortOption = 'desc', filter,
+  }: WorksWithReviewsOptions = {}): Promise<{ works: AssembledWorkRow[]; totalCount: Array<{ count: number }> }> => {
     let coreQ = knex('t_work')
       .join('t_review', function() {
         this.on('t_review.work_id', '=', 't_work.id')
@@ -1151,7 +1403,7 @@ const makeQueries = (knex) => {
     // 'userRating' is what the Favourites page sends as its sort option key;
     // 'rating' is the value used elsewhere (e.g. getWorksBy). Treat both as
     // the user's review rating, which lives on t_review (aliased as userRating).
-    let orderCol;
+    let orderCol: string;
     if (orderBy === 'rating' || orderBy === 'userRating') {
       orderCol = 't_review.rating';
     } else {
@@ -1162,15 +1414,17 @@ const makeQueries = (knex) => {
 
     // Compute totalCount
     const countRow = await coreQ.clone().count('t_work.id as count').first();
-    const totalCount = [{ count: countRow ? countRow.count : 0 }];
+    const totalCount = [{ count: countRow ? countRow.count as number : 0 }];
 
-    const rows = await coreQ.clone().limit(limit).offset(offset);
+    const rows: WorkListRow[] = await coreQ.clone().limit(limit).offset(offset);
     const works = await assembleWorks(rows, { username });
 
     return {works, totalCount};
   };
 
-  const getPlayHistory = async ({username = '', sortOption = 'desc', limit = 1000, offset = 0, excludeFinished = 'listened'}) => {
+  const getPlayHistory = async ({
+    username = '', sortOption = 'desc', limit = 1000, offset = 0, excludeFinished = 'listened',
+  }: PlayHistoryQueryOptions = {}): Promise<{ works: AssembledWorkRow[]; totalCount: Array<{ count: number }> }> => {
     let coreQ = knex('t_work')
       .join('t_play_history', function() {
         this.on('t_play_history.work_id', '=', 't_work.id')
@@ -1199,9 +1453,9 @@ const makeQueries = (knex) => {
     }
 
     const countRow = await coreQ.clone().count('t_work.id as count').first();
-    const totalCount = [{ count: countRow ? countRow.count : 0 }];
+    const totalCount = [{ count: countRow ? countRow.count as number : 0 }];
 
-    const rows = await coreQ.clone().limit(limit).offset(offset);
+    const rows: HistoryListRow[] = await coreQ.clone().limit(limit).offset(offset);
     await applyTrackProgressSeconds(username, rows);
     // No reviewFields: the hide-finished filter is applied server-side above, and
     // t_review.progress is already spread into each work item via the LEFT JOIN
@@ -1213,16 +1467,16 @@ const makeQueries = (knex) => {
     return {works, totalCount};
   };
 
-  const updatePlayHistory = async (username, work_id, state) => knex.transaction(async(trx) => {
+  const updatePlayHistory = async (username: string, work_id: string, state: string) => knex.transaction(async(trx) => {
     await trx.raw('INSERT OR IGNORE INTO t_play_history (user_name, work_id, state) VALUES (?, ?, ?);', [username, work_id, state]);
     await trx.raw('UPDATE t_play_history SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE user_name = ? AND work_id = ?;', [state, username, work_id]);
   });
 
-  async function deletePlayHistory(username, work_id) {
+  async function deletePlayHistory(username: string, work_id: string): Promise<void> {
     await knex('t_play_history').where('work_id', '=', work_id).where('user_name', '=', username).del();
   }
 
-  const getMetadata = ({field = 'circle', id} = {}) => {
+  const getMetadata = ({field = 'circle', id}: { field?: string; id: string }) => {
     const validFields = ['circle', 'tag', 'va', 'illustrator', 'script_writer', 'series', 'author'];
     if (!validFields.includes(field)) throw new Error('无效的查询域');
     return knex(`t_${field}`)
@@ -1234,10 +1488,9 @@ const makeQueries = (knex) => {
   /**
    * Reads the scraped work-page extras: description, per-part description
    * structure (incl. the track list) and the sample image list.
-   * @param {String} work_id
-   * @returns {Promise<Object|null>} { description, descriptionParts, sampleImages }
+   * @returns { description, descriptionParts, sampleImages } or null
    */
-  async function getWorkExtras(work_id) {
+  async function getWorkExtras(work_id: string): Promise<{ description: string; descriptionParts: DescriptionPart[]; sampleImages: SampleImage[] } | null> {
     const row = await knex('t_work')
       .select('description', 'description_parts', 'sample_images')
       .where('id', '=', work_id)
@@ -1247,18 +1500,18 @@ const makeQueries = (knex) => {
 
     return {
       description: row.description || '',
-      descriptionParts: parseJsonColumn(row.description_parts),
-      sampleImages: parseJsonColumn(row.sample_images),
+      descriptionParts: parseJsonColumn<DescriptionPart[]>(row.description_parts),
+      sampleImages: parseJsonColumn<SampleImage[]>(row.sample_images),
     };
   }
 
   /**
    * Overwrites the stored sample image list. Used by the scanner to record
    * which images actually made it to disk (the `file` field).
-   * @param {String} work_id
-   * @param {Array<Object>} sampleImages
+   * @param work_id
+   * @param sampleImages
    */
-  async function setWorkSampleImages(work_id, sampleImages) {
+  async function setWorkSampleImages(work_id: string, sampleImages: SampleImage[]): Promise<void> {
     await knex('t_work')
       .where('id', '=', work_id)
       .update({ sample_images: JSON.stringify(sampleImages || []) });
@@ -1270,10 +1523,10 @@ const makeQueries = (knex) => {
    * Replace rather than merge: DLsite lets reviewers edit and delete, so a
    * merge would keep stale text around forever. Reviews carry no local state,
    * so nothing is lost by rewriting them.
-   * @param {String} work_id
-   * @param {Array<Object>} reviews Normalized reviews from scrapeWorkReviewsFromDLsite.
+   * @param work_id
+   * @param reviews Normalized reviews from scrapeWorkReviewsFromDLsite.
    */
-  const replaceWorkDlsiteReviews = async (work_id, reviews) => knex.transaction(async (trx) => {
+  const replaceWorkDlsiteReviews = async (work_id: string, reviews: DlsiteReviewInput[]) => knex.transaction(async (trx) => {
     await trx('t_dlsite_review').where('work_id', work_id).del();
     if (!reviews || !reviews.length) return;
 
@@ -1302,11 +1555,10 @@ const makeQueries = (knex) => {
 
   /**
    * Reads a work's stored DLsite reviews, newest first.
-   * @param {String} work_id
-   * @returns {Promise<Array<Object>>}
+   * @param work_id
    */
-  async function getWorkDlsiteReviews(work_id) {
-    const rows = await knex('t_dlsite_review')
+  async function getWorkDlsiteReviews(work_id: string): Promise<Array<DlsiteReviewRow & { genres: unknown[] }>> {
+    const rows: DlsiteReviewRow[] = await knex('t_dlsite_review')
       .select('*')
       .where('work_id', '=', work_id)
       .orderBy('regist_date', 'desc');
@@ -1324,14 +1576,18 @@ const makeQueries = (knex) => {
 
   // t_work_file: a work's local file tree
   // Written only by the scan paths (see filesystem/workFiles.js).
-  const getWorkFiles = async (work_id) => knex('t_work_file')
-    .select('rel_path', 'duration', 'mtime', 'track_title')
-    .where('work_id', String(work_id));
+  const getWorkFiles = async (work_id: string): Promise<Array<Pick<WorkFileRow, 'rel_path' | 'duration' | 'mtime' | 'track_title'>>> => {
+    const rows: Array<Pick<WorkFileRow, 'rel_path' | 'duration' | 'mtime' | 'track_title'>> =
+      await knex('t_work_file')
+        .select('rel_path', 'duration', 'mtime', 'track_title')
+        .where('work_id', String(work_id));
+    return rows;
+  };
 
   /**
    * Replace a work's file rows and stamp files_indexed_at
    */
-  const replaceWorkFiles = async (work_id, rows) => {
+  const replaceWorkFiles = async (work_id: string, rows: WorkFileWriteRow[]): Promise<void> => {
     await knex.transaction(async (trx) => {
       await trx('t_work_file').where('work_id', String(work_id)).del();
       // Chunked: SQLite caps bound parameters per statement, and a 472-file
@@ -1347,10 +1603,10 @@ const makeQueries = (knex) => {
    * Set display names on existing rows, by relPath. Used by
    * scripts/extract-track-titles.js -- a targeted update rather than
    * replaceWorkFiles, which would drop rows the extractor never looked at.
-   * @param {Object} titles { relPath: title }
-   * @returns {Promise<Number>} rows actually updated
+   * @param titles { relPath: title }
+   * @returns rows actually updated
    */
-  const setTrackTitles = async (work_id, titles) => {
+  const setTrackTitles = async (work_id: string, titles: Record<string, string | null>): Promise<number> => {
     let updated = 0;
     for (const [relPath, title] of Object.entries(titles || {})) {
       updated += await knex('t_work_file')
@@ -1361,9 +1617,9 @@ const makeQueries = (knex) => {
   };
 
   // t_track_progress queries
-  const getTrackProgress = async (username, work_id) => {
+  const getTrackProgress = async (username: string, work_id: string): Promise<Record<string, TrackProgressHit>> => {
     const byKey = await trackProgressFor(username, { workId: work_id });
-    const map = {};
+    const map: Record<string, TrackProgressHit> = {};
     for (const [key, hit] of byKey) {
       // key is `${workId}\u0000${relPath}`; the client wants it keyed by trackId.
       map[key.replace('\u0000', '/')] = hit;
@@ -1376,12 +1632,19 @@ const makeQueries = (knex) => {
    *
    * Changing this to other formats would need a db migration.
    */
-  const utcStamp = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+  const utcStamp = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
 
   /**
    * Write a track's position, newest observation wins.
    */
-  const upsertTrackProgress = async (username, work_id, track_key, seconds, completed, observedAt) => {
+  const upsertTrackProgress = async (
+    username: string,
+    work_id: string,
+    track_key: string,
+    seconds: number,
+    completed: boolean,
+    observedAt?: number,
+  ): Promise<void> => {
     const stamp = utcStamp(observedAt || Date.now());
     await knex.raw(`
       INSERT INTO t_track_progress (user_name, work_id, track_key, seconds, completed, updated_at)

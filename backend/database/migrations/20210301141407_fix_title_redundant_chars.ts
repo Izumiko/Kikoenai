@@ -1,7 +1,8 @@
-// @ts-nocheck
 // Issue #29
-export const up = async function(knex) {
-  const fixTitle = (title) => {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
+  const fixTitle = (title: string): string => {
     const pattern = /(円|日元)$/u;
     return title.replace(pattern, '');
   };
@@ -21,6 +22,6 @@ export const up = async function(knex) {
 
 // Cannot be reverted
  
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
 
 };

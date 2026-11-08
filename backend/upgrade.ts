@@ -5,14 +5,6 @@ import { configFolderDir } from './config.ts';
 import knexMigrate from './database/knex-migrate.ts';
 import { knex } from './database/db.ts';
 
-// database/knex-migrate.ts is still untyped, so its optional parameters read
-// as required. Both are optional: the runner defaults them itself.
-const migrate = knexMigrate as (
-  command: 'up' | 'skipAll',
-  flags?: { to?: string },
-  progress?: (info: { action: string; migration: string }) => void,
-) => Promise<void>;
-
 // Before the following version, there is a hash collision issue in the VA table
 const versionVAHashCollisionFixed = '0.6.0-rc.2';
 // Before the following version, the knexfile path uses relative path to CWD, which causes a bunch of problems on Mac OS
@@ -34,15 +26,15 @@ const applyFix = async (oldVersion: string): Promise<void> => {
   if (compareVersions.compare(oldVersion, versionKnexfilePathFixed, '<')) {
     if (process.platform === 'darwin') {
       // Skip to v0.6.0-rc.0
-      await migrate('skipAll', { to: '20210206141840' });
+      await knexMigrate('skipAll', { to: '20210206141840' });
       const results: Array<{ type: string }> = await knex.raw('PRAGMA table_info(\'t_va\')');
       if (results[0]['type'] === 'integer') {
         // Fill VA ids, migrate to v0.6.0-rc.3
         const log = ({ action, migration }: { action: string; migration: string }): void => console.log('Doing ' + action + ' on ' + migration);
-        await migrate('up', { to: '20210213233544' }, log);
+        await knexMigrate('up', { to: '20210213233544' }, log);
       } else {
         // Already fixed VA ids, skip to v0.6.0-rc.3
-        await migrate('skipAll', { to: '20210213233544' });
+        await knexMigrate('skipAll', { to: '20210213233544' });
       }
     }
   }

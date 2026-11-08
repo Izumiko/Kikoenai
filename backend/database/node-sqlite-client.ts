@@ -1,4 +1,3 @@
-// @ts-nocheck
 // knex client backed by node:sqlite's built-in DatabaseSync.
 //
 // knex has no node:sqlite dialect, so this reuses the better-sqlite3 dialect
@@ -7,11 +6,13 @@
 // module's defaults, which node:sqlite flips: foreign key constraints are ON by
 // default there, and double-quoted string literals are rejected.
 import { DatabaseSync } from 'node:sqlite';
+import type { SQLOutputValue } from 'node:sqlite';
 import Client_BetterSQLite3 from 'knex/lib/dialects/better-sqlite3/index.js';
+import type { KnexQueryObject } from 'knex/lib/dialects/better-sqlite3/index.js';
 
 // node:sqlite returns rows with a null prototype; everything downstream expects
 // plain objects (e.g. `row.hasOwnProperty(...)` in route code).
-function toPlainRow(row) {
+function toPlainRow(row: Record<string, SQLOutputValue>): Record<string, SQLOutputValue> {
   return { ...row };
 }
 
@@ -25,7 +26,7 @@ class Client_NodeSQLite extends Client_BetterSQLite3 {
   // filename is required here, so an explicit readOnly opt-out is all that is
   // needed. `enableForeignKeyConstraints` must stay off to match sqlite3, but
   // knexfile's afterCreate turns the pragma on for the app connection.
-  async acquireRawConnection() {
+  async acquireRawConnection(): Promise<DatabaseSync> {
     const options = this.connectionSettings.options || {};
 
     return new DatabaseSync(this.connectionSettings.filename, {
@@ -35,11 +36,11 @@ class Client_NodeSQLite extends Client_BetterSQLite3 {
     });
   }
 
-  async destroyRawConnection(connection) {
+  async destroyRawConnection(connection: DatabaseSync): Promise<void> {
     return connection.close();
   }
 
-  async _query(connection, obj) {
+  async _query(connection: DatabaseSync, obj: KnexQueryObject): Promise<KnexQueryObject> {
     if (!obj.sql) throw new Error('The query is empty');
 
     if (!connection) {

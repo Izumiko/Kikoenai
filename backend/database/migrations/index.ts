@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Migration manifest.
 //
 // knex_migrations rows written by the CommonJS version of this app hold the

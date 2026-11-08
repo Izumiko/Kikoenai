@@ -1,5 +1,6 @@
-// @ts-nocheck
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   try {
     await knex.schema.raw(
       `CREATE VIEW IF NOT EXISTS userMetadata AS
@@ -41,6 +42,6 @@ export const up = async function(knex) {
 
 // Do nothing
  
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
 
 };

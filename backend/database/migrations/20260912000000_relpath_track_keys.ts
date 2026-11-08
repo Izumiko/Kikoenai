@@ -1,33 +1,70 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
+
 /**
  * One file identity: relPath replaces the CRC32 content hash.
  */
 
+/** A queue item as older clients stored it, before trackId became a relPath handle. */
+interface StoredQueueItem {
+  trackId?: string;
+  hash?: string;
+  contentHash?: string;
+  title?: string;
+  subtitle?: string | null;
+  mediaStreamUrl?: string;
+  mediaDownloadUrl?: string;
+  [key: string]: unknown;
+}
+
+/** The parts of t_work.memo this migration reads (the column existed back then). */
+interface WorkMemo {
+  contentHash?: Record<string, string>;
+  hash?: Record<string, string>;
+  duration?: Record<string, number>;
+  mtime?: Record<string, number>;
+  trackTitles?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+interface WorkMemoEntry {
+  memo: WorkMemo;
+  byHash: Map<string, string>;
+  /** Every relPath the memo lists; filled by the caller. */
+  paths: Set<string>;
+}
+
+/** The client's stored playback state. */
+interface PlaybackState {
+  queue?: StoredQueueItem[];
+  index?: number;
+  [key: string]: unknown;
+}
+
 // `${workId}/${relPath}` — the handle the API now serves and the frontend stores.
-const trackIdFor = (workId, relPath) => `${workId}/${relPath}`;
+const trackIdFor = (workId: string, relPath: string): string => `${workId}/${relPath}`;
 
 // Must stay in step with HASH_KEY in scripts/rekey-track-progress.js.
 const HASH_KEY = /^[0-9a-f]{8}$/;
 
 /** relPath → hash, inverted to hash → relPath. First writer wins on a tie. */
-const invertHashes = (memoJson) => {
-  let memo;
+const invertHashes = (memoJson: string | null): WorkMemoEntry => {
+  let memo: WorkMemo;
   try {
     memo = JSON.parse(memoJson || '{}') || {};
   } catch {
-    return { memo: {}, byHash: new Map() };
+    return { memo: {}, byHash: new Map(), paths: new Set() };
   }
   const source = memo.contentHash || memo.hash || {};
-  const byHash = new Map();
+  const byHash = new Map<string, string>();
   for (const [relPath, hash] of Object.entries(source)) {
     if (hash && !byHash.has(hash)) byHash.set(hash, relPath);
   }
-  return { memo, byHash };
+  return { memo, byHash, paths: new Set() };
 };
 
 /** Every relPath the memo knows, spelled the way trackIds are (forward slashes). */
-const memoPaths = (memo) => new Set(
-  ['duration', 'mtime', 'trackTitles']
+const memoPaths = (memo: WorkMemo): Set<string> => new Set(
+  (['duration', 'mtime', 'trackTitles'] as const)
     .flatMap((field) => Object.keys((memo && memo[field]) || {}))
     .map((relPath) => String(relPath).split('\\').join('/'))
 );
@@ -39,25 +76,26 @@ const POSITIONAL = /^\d+$/;
  * pre-text-id numeric spelling of the row's own work (`1636129` for `01636129`)
  * is rewritten: a queue can hold tracks of other works, and those are left alone.
  */
-const workIdForPrefix = (prefix, rowWorkId) => {
+const workIdForPrefix = (prefix: string, rowWorkId: string): string | null => {
   if (prefix === rowWorkId) return rowWorkId;
-  const bare = (id) => id.replace(/^0+/, '');
+  const bare = (id: string): string => id.replace(/^0+/, '');
   return POSITIONAL.test(prefix) && POSITIONAL.test(rowWorkId) && bare(prefix) === bare(rowWorkId)
     ? rowWorkId
     : null;
 };
 
 /** Rebuild a positional item's relPath from its title and folder, if the memo has that file. */
-const relPathFromItem = (item, paths) => {
-  if (typeof item.title !== 'string' || !item.title) return null;
+const relPathFromItem = (item: StoredQueueItem, paths: Set<string>): string | null => {
+  const title = item.title;
+  if (typeof title !== 'string' || !title) return null;
   let candidate = null;
   if (typeof item.subtitle === 'string') {
-    candidate = `${item.subtitle.split('\\').join('/')}/${item.title}`;
+    candidate = `${item.subtitle.split('\\').join('/')}/${title}`;
   } else if (item.subtitle === null) {
-    candidate = item.title;
+    candidate = title;
   } else {
     // Older queue items dropped the folder: accept the name only when it is unique.
-    const matches = [...paths].filter((p) => p === item.title || p.endsWith(`/${item.title}`));
+    const matches = [...paths].filter((p) => p === title || p.endsWith(`/${title}`));
     if (matches.length === 1) candidate = matches[0];
   }
   // A guessed path that is not on the list would 404, where the old handle still plays.
@@ -69,7 +107,7 @@ const relPathFromItem = (item, paths) => {
  * when the item now holds a `workId/relPath` trackId, false when it was left alone.
  * Mutates the item; the pre-rename `hash` field is folded in by the caller after.
  */
-const resolveLegacyHandle = (item, rowWorkId, byWork) => {
+const resolveLegacyHandle = (item: StoredQueueItem, rowWorkId: string, byWork: Map<string, WorkMemoEntry>): boolean => {
   const handle = typeof item.trackId === 'string' ? item.trackId : item.hash;
   if (typeof handle !== 'string') return false;
   const slash = handle.indexOf('/');
@@ -93,9 +131,9 @@ const resolveLegacyHandle = (item, rowWorkId, byWork) => {
   return true;
 };
 
-export const up = async function (knex) {
-  const works = await knex('t_work').select('id', 'memo');
-  const byWork = new Map();
+export const up = async (knex: Knex): Promise<void> => {
+  const works: Array<{ id: string; memo: string | null }> = await knex('t_work').select('id', 'memo');
+  const byWork = new Map<string, WorkMemoEntry>();
   for (const work of works) {
     const entry = invertHashes(work.memo);
     entry.paths = memoPaths(entry.memo);
@@ -103,7 +141,8 @@ export const up = async function (knex) {
   }
 
   // 1. t_track_progress: track_key from CRC32 to relPath.
-  const progressRows = await knex('t_track_progress').select('user_name', 'work_id', 'track_key');
+  const progressRows: Array<{ user_name: string; work_id: string; track_key: string }> =
+    await knex('t_track_progress').select('user_name', 'work_id', 'track_key');
   let rekeyed = 0;
   let stranded = 0;
   for (const row of progressRows) {
@@ -130,12 +169,13 @@ export const up = async function (knex) {
   }
 
   // 2. t_play_history: queue item trackIds from `workId/index` to `workId/relPath`.
-  const historyRows = await knex('t_play_history').select('user_name', 'work_id', 'state');
+  const historyRows: Array<{ user_name: string; work_id: string; state: string | null }> =
+    await knex('t_play_history').select('user_name', 'work_id', 'state');
   let converted = 0;
   let untouched = 0;
   for (const row of historyRows) {
     if (!row.state) continue;
-    let state;
+    let state: PlaybackState;
     try {
       state = JSON.parse(row.state);
     } catch {
@@ -147,7 +187,8 @@ export const up = async function (knex) {
     const entry = byWork.get(rowWorkId);
     let changed = false;
     let resolvedAll = true;
-    for (const item of state.queue) {
+    const queue: StoredQueueItem[] = state.queue;
+    for (const item of queue) {
       const hash = item.contentHash;
       const relPath = hash && entry && entry.byHash.get(hash);
       const before = item.trackId;
@@ -168,7 +209,8 @@ export const up = async function (knex) {
       // playing the positional URL and skip a downloaded copy. The player derives
       // the default itself; only an offload URL (no /api/) is worth keeping.
       for (const [field, route] of [['mediaStreamUrl', '/api/media/stream/'], ['mediaDownloadUrl', '/api/media/download/']]) {
-        if (typeof item[field] === 'string' && item[field].includes(route)) {
+        const url = item[field];
+        if (typeof url === 'string' && url.includes(route)) {
           delete item[field];
           changed = true;
         }
@@ -214,7 +256,7 @@ export const up = async function (knex) {
   }
 };
 
-export const down = async function () {
+export const down = async (): Promise<void> => {
   // Irreversible by construction: the memo hashes this migration keyed off are
   // stripped, and recomputing them means reading every audio file — which is
   // the cost the change exists to remove. Restore from a backup instead.

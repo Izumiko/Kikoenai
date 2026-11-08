@@ -1,5 +1,6 @@
-// @ts-nocheck
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   let exist = await knex.schema.hasTable('t_review');
   if (!exist) {
     await knex.schema.createTable("t_review", function(table) {
@@ -15,6 +16,6 @@ export const up = async function(knex) {
   }
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   await knex.schema.dropTable("t_review");
 };

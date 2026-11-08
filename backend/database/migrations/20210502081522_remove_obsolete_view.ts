@@ -1,11 +1,12 @@
-// @ts-nocheck
 // Replaced by staticMetadata
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   await knex.schema.raw('DROP VIEW IF EXISTS userMetadata');
 };
 
 // Bring up old userMetadata to revert
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   try {
     await knex.schema.raw(
       `CREATE VIEW IF NOT EXISTS userMetadata AS

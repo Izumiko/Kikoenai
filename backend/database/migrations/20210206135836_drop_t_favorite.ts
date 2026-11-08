@@ -1,10 +1,11 @@
-// @ts-nocheck
 // This table is from upstream, which is no longer in use
-export const up = async function(knex) {
+import type { Knex } from 'knex';
+
+export const up = async (knex: Knex): Promise<void> => {
   await knex.schema.dropTableIfExists('t_favorite');
 };
 
-export const down = async function(knex) {
+export const down = async (knex: Knex): Promise<void> => {
   let exist = await knex.schema.hasTable('t_favorite');
   if (!exist) {
     await knex.schema.createTable("t_favorite", function(table) {
