@@ -19,8 +19,10 @@
  *   --purge    discard the leftover rows instead of recovering them
  */
 
-process.env.FREEZE_CONFIG_FILE = process.env.FREEZE_CONFIG_FILE || '1';
-
+// Must stay the first import: it sets FREEZE_CONFIG_FILE before config.ts (via
+// database/db.ts) runs its module-init side effects. A statement here would run
+// after every import, which is too late.
+import './freeze-config.ts';
 import fs from 'fs';
 import zlib from 'zlib';
 import path from 'path';
