@@ -9,17 +9,17 @@
 //
 // Exits non-zero if anything looks wrong, so it can be used in a pipeline.
 
-import { createRequire } from 'node:module';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parseSubtitleCues, parseLrcCues, formatLrcMs } from '../frontend/src/utils/subtitles.js';
 
-// The discovery rules live in the backend and are CommonJS. Freeze the config
-// file first: requiring them pulls in config.js, which otherwise writes one.
+// The discovery rules live in the backend, now TypeScript that Node 26 runs
+// natively. Freeze the config file first: importing them pulls in config.ts,
+// which otherwise writes one. These are dynamic imports, not static ones --
+// static imports are all evaluated before the assignment below could run.
 process.env.FREEZE_CONFIG_FILE = '1';
-const require = createRequire(import.meta.url);
-const { findLyricTracks, supportedLyricExtensions } = require('../backend/routes/utils/lyrics.js');
-const { supportedMediaExtList } = require('../backend/filesystem/utils.js');
+const { findLyricTracks, supportedLyricExtensions } = await import('../backend/routes/utils/lyrics.ts');
+const { supportedMediaExtList } = await import('../backend/filesystem/utils.ts');
 
 const ESC = '\u001b[';
 const BOLD = `${ESC}1m`, DIM = `${ESC}2m`, RESET = `${ESC}0m`;

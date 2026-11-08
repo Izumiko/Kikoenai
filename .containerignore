@@ -4,23 +4,19 @@
 # redhat-actions/buildah-build in .github/workflows/build.yml, and buildah
 # prefers this filename. There is no Docker/BuildKit anywhere in the pipeline.
 #
-# The Containerfile copies package*.json, backend/package*.json, and then all of
-# backend/. Everything listed here is either never copied, or actively harmful
-# to have in the image.
-#
-# NOTE: backend/dist/ is gitignored but MUST reach the image -- CI builds the
-# frontend into it just before the image build. Do not add it here.
+# The Containerfile builds everything itself: the build stage runs `npm ci` and
+# then builds the frontend (into backend/dist) and bundles the backend (into
+# backend/build). So the context has to carry both workspaces' sources and the
+# root lockfile -- but no build output and no runtime data.
 
 # Git
 .git
 .gitignore
 
 # Node modules
-# The build stage runs its own `npm ci -w backend --omit=dev` against Alpine
-# (musl). `COPY ./backend/ ./` is the LAST copy in the final stage, so a
-# backend/node_modules present in the context would overlay the Alpine-built
-# native modules with whatever the host compiled, and sqlite3 would fail to
-# load. backend/node_modules is listed explicitly rather than relying on the
+# The build stage runs its own `npm ci` against Alpine (musl). A host
+# node_modules in the context would overlay the Alpine install with binaries
+# built for the host's libc. Listed per workspace rather than relying on the
 # bare `node_modules` pattern, which only matches at the context root.
 node_modules
 backend/node_modules
@@ -28,12 +24,13 @@ frontend/node_modules
 .pnp
 .pnp.js
 
-# Frontend source — not needed in the container
-frontend
+# Build artifacts
+# Both are produced inside the image by the build stage; copying a host build
+# in would only add stale chunks/WebApp files to the context. (backend/dist is
+# gitignored, so CI never has one anyway.)
+backend/build
+backend/dist
 .quasar
-
-# Build artifacts (already placed by CI)
-# dist is handled by explicit COPY in Containerfile
 
 # Runtime data: secrets, and an entire library
 # These live under backend/, not at the context root -- the earlier root-level
@@ -61,10 +58,13 @@ backend/VoiceWork
 test-results
 tests
 backend/test
-*.spec.js
+*.spec.*
 
-# Root scripts — never copied by the Containerfile
+# Root scripts -- never used by the image build
 scripts
+
+# Package output (scripts/package.js)
+package
 
 # VS Code
 .vscode
@@ -79,7 +79,9 @@ npm-debug.log*
 
 # Docs
 # Nothing reads markdown at runtime (checked: no route opens a .md file).
-# LICENSE is deliberately NOT excluded -- GPL-3.0 requires shipping it.
+# LICENSE is deliberately NOT excluded -- it is not markdown, and the
+# Containerfile copies it into the image explicitly. GPL-3.0 requires shipping
+# it.
 *.md
 backend/*.md
 frontend/*.md

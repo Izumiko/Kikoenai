@@ -16,22 +16,10 @@ jobs:
       - name: Checkout full repository
         uses: actions/checkout@v7
 
-      # ── Frontend ──────────────────────────────────────────────
-      - name: Use Node.js for frontend
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci -w frontend
-
-      - name: Build frontend (production, no debug)
-        run: npm run build:prod
-        working-directory: frontend
-
       # ── Container image ───────────────────────────────────────
+      # The Containerfile's build stage runs `npm ci` and then builds the
+      # frontend and bundles the backend *inside* the Node 26 image build, so
+      # the runner needs no Node install and no pre-built artifacts.
       - name: Generate image metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -67,6 +55,9 @@ jobs:
           context: ./
           containerfiles: |
             ./Containerfile
+          # Production build: minified backend bundle, production WebApp.
+          build-args: |
+            KIKO_DEBUG=0
           oci: true
 
       - name: Push image to GitHub Container Registry

@@ -1,25 +1,42 @@
 #!/usr/bin/env node
+// Kikoenai Windows portable packager.
+//
+// Stages a self-contained Kikoenai/ folder and zips it:
+//
+//   Kikoenai/
+//     node/node.exe            pinned Node 26 win-x64 runtime
+//     app/                     = backend/build/ (the esbuild bundle + dist/ + static/)
+//     ffmpeg/ffmpeg.exe        standalone ffmpeg/ffprobe (BtbN GPL build)
+//     ffmpeg/ffprobe.exe
+//     Kikoenai.bat             launcher (sets KIKO_DATA_DIR + NODE_ENV)
+//
+// The user unzips it and double-clicks Kikoenai.bat; no Node/ffmpeg on PATH
+// needed. Nothing in the bundle is native, so this runs on ANY host OS and the
+// only Windows binaries are downloaded prebuilt.
+//
+//   npm run package:windows
+//
+// Output: package/dist/Kikoenai-windows-x64-<version>.zip
+//
+// Offline structure verification (no network needed):
+//   KIKO_SKIP_DOWNLOAD=1     skip the downloads and stage empty placeholder
+//                            executables, so the folder layout can be checked
+//                            without network access (NOT a usable package).
+//   KIKO_NODE_ZIP=<path>     use a local Node win-x64 .zip instead of downloading.
+//   KIKO_FFMPEG_ZIP=<path>   use a local ffmpeg win64 .zip instead of downloading.
+//
+// Stdlib only -- no dependencies, and the zip is written/read by hand so the
+// script works identically on Linux, macOS and Windows.
 'use strict';
-/*
- * Kikoenai Windows portable packager.
- *
- * Stages a self-contained Kikoenai/ folder (bundled Node 24 + Windows-native
- * sqlite3 + ffmpeg/ffprobe + built frontend + backend source) and zips it.
- * The user unzips and double-clicks Kikoenai.bat; no Node/ffmpeg on PATH needed.
- *
- * MUST run on a Windows host (CI windows-latest or a local Windows box) so the
- * prebuilt sqlite3 win-x64 .node bindings are fetched. Stdlib only -- no deps.
- *
- *   npm run package:windows
- *
- * Output: package/dist/Kikoenai-windows-x64-<version>.zip
- */
-const fs = require('fs');
-const path = require('path');
-const { execFileSync } = require('child_process');
+
+const fs = require('node:fs');
+const path = require('node:path');
+const zlib = require('node:zlib');
+const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const BACKEND = path.join(ROOT, 'backend');
+const BUILD_DIR = path.join(BACKEND, 'build');
 const pkgVersion = require(path.join(BACKEND, 'package.json')).version;
 // CI passes the triggering git tag (vX.Y.Z) via PACKAGE_VERSION for tag builds;
 // strip the leading "v" to match the package.json semver shape. Fall back to
@@ -30,50 +47,36 @@ const VERSION = tagVersion
   : pkgVersion;
 
 // Pinned for reproducibility. Bump here when upgrading the shipped runtime.
-// Node 24 LTS (Krypton).
-const NODE_VERSION = 'v24.19.0';
+// Node 26 LTS (Lithium).
+const NODE_VERSION = 'v26.13.0';
 const NODE_URL = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-win-x64.zip`;
 // BtbN GPL build -- license-compatible with GPL-3.0. `latest` tag is auto-refreshed;
 // only ffmpeg.exe + ffprobe.exe are extracted into ffmpeg/.
 const FFMPEG_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';
 
-const STAGE = path.join(ROOT, 'package', 'windows', 'Kikoenai');
+const STAGE_ROOT = path.join(ROOT, 'package', 'windows');
+const STAGE = path.join(STAGE_ROOT, 'Kikoenai');
 const APP_DIR = path.join(STAGE, 'app');
 const DIST_DIR = path.join(ROOT, 'package', 'dist');
 const ZIP_OUT = path.join(DIST_DIR, `Kikoenai-windows-x64-${VERSION}.zip`);
 
-if (process.platform !== 'win32') {
-  console.error('package:windows must run on a Windows host (needs Windows-native sqlite3 bindings).');
-  console.error('Use the .github/workflows/package-windows.yml workflow on windows-latest.');
-  process.exit(1);
-}
+const skipDownload = process.env.KIKO_SKIP_DOWNLOAD === '1';
 
-function npm(args, opts = {}) {
+function npm(args) {
   console.log('$ npm', args.join(' '));
-  execFileSync('npm', args, { stdio: 'inherit', shell: true, ...opts });
+  // On Windows npm is a .cmd shim, which Node can only spawn through a shell.
+  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
 }
 
 function rm(p) { fs.rmSync(p, { recursive: true, force: true }); }
 function mkdir(p) { fs.mkdirSync(p, { recursive: true }); }
-
-// bsdtar (Windows 10+ System32\tar.exe) handles both zip extract and create.
-function extractZip(zip, dest) {
-  mkdir(dest);
-  execFileSync('tar', ['-xf', zip, '-C', dest], { stdio: 'inherit' });
-}
-function createZip(srcDir, outFile) {
-  rm(outFile);
-  // -a infers zip from the .zip extension; -C makes the folder the top entry.
-  execFileSync('tar', ['-a', '-c', '-f', outFile, '-C', path.dirname(srcDir), path.basename(srcDir)], { stdio: 'inherit' });
-}
-
-async function download(url, destFile) {
-  console.log('downloading', url);
-  const res = await fetch(url, { redirect: 'follow' });
-  if (!res.ok) throw new Error(`download failed ${res.status} ${url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(destFile, buf);
-  console.log(`  -> ${destFile} (${(buf.length / 1e6).toFixed(1)} MB)`);
+function placeholder(file) {
+  mkdir(path.dirname(file));
+  fs.writeFileSync(file, '');
+  console.log(`  ! KIKO_SKIP_DOWNLOAD=1 -- staged empty placeholder ${path.relative(STAGE, file)}`);
 }
 
 function findFile(dir, name) {
@@ -85,79 +88,302 @@ function findFile(dir, name) {
   return null;
 }
 
-// Backend source dirs to skip when staging app/ (data dirs belong at the archive
-// root, not inside app/; node_modules is staged separately; test/ not needed).
-const EXCLUDE = new Set(['node_modules', 'config', 'sqlite', 'covers', 'VoiceWork', 'test', '.git']);
+// ── minimal ZIP reader (extraction) ────────────────────────────────────────
+// `tar` on Linux cannot read zip, and unzip/python are not guaranteed on every
+// host, so extraction is done here from the central directory. Handles stored
+// and deflated entries, data descriptors (sizes taken from the central
+// directory) and the zip64 size/offset fields.
 
-function stageBackendSource() {
-  console.log('staging backend source -> app/');
+const EOCD_SIG = 0x06054b50;
+const CEN_SIG = 0x02014b50;
+const LOC_SIG = 0x04034b50;
+
+function readZipEntries(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i--) {
+    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip file (no end-of-central-directory record)');
+
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const entries = [];
+
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== CEN_SIG) throw new Error(`corrupt zip: bad central directory entry #${i}`);
+    const method = buf.readUInt16LE(p + 10);
+    let compSize = buf.readUInt32LE(p + 20);
+    let uncompSize = buf.readUInt32LE(p + 24);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    let localOffset = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+
+    // The zip64 extra field (id 0x0001) holds, in order, only the values whose
+    // 32-bit field is 0xFFFFFFFF.
+    let extra = p + 46 + nameLen;
+    const extraEnd = extra + extraLen;
+    while (extra + 4 <= extraEnd) {
+      const id = buf.readUInt16LE(extra);
+      const size = buf.readUInt16LE(extra + 2);
+      if (id === 0x0001) {
+        let q = extra + 4;
+        if (uncompSize === 0xffffffff) { uncompSize = Number(buf.readBigUInt64LE(q)); q += 8; }
+        if (compSize === 0xffffffff) { compSize = Number(buf.readBigUInt64LE(q)); q += 8; }
+        if (localOffset === 0xffffffff) { localOffset = Number(buf.readBigUInt64LE(q)); q += 8; }
+      }
+      extra += 4 + size;
+    }
+
+    entries.push({ name, method, compSize, uncompSize, localOffset });
+    p = extraEnd + commentLen;
+  }
+  return entries;
+}
+
+function extractZip(zipFile, destDir) {
+  const buf = fs.readFileSync(zipFile);
+  for (const entry of readZipEntries(buf)) {
+    // Directory entries carry no data; the file writes below create the dirs.
+    if (entry.name.endsWith('/')) continue;
+    if (buf.readUInt32LE(entry.localOffset) !== LOC_SIG) {
+      throw new Error(`corrupt zip: bad local header for ${entry.name}`);
+    }
+    const nameLen = buf.readUInt16LE(entry.localOffset + 26);
+    const extraLen = buf.readUInt16LE(entry.localOffset + 28);
+    const start = entry.localOffset + 30 + nameLen + extraLen;
+    const raw = buf.subarray(start, start + entry.compSize);
+
+    let data;
+    if (entry.method === 0) data = raw;
+    else if (entry.method === 8) data = zlib.inflateRawSync(raw);
+    else throw new Error(`unsupported zip compression method ${entry.method} for ${entry.name}`);
+    if (data.length !== entry.uncompSize) {
+      throw new Error(`corrupt zip: ${entry.name} inflated to ${data.length} bytes, expected ${entry.uncompSize}`);
+    }
+
+    // Never let an archive entry escape the extraction directory.
+    const parts = entry.name.split('/').filter((part) => part && part !== '.' && part !== '..');
+    const target = path.join(destDir, ...parts);
+    mkdir(path.dirname(target));
+    fs.writeFileSync(target, data);
+  }
+}
+
+// ── minimal ZIP writer (packaging) ─────────────────────────────────────────
+// `tar -a -cf` only makes zips on some hosts (bsdtar), so the archive is
+// written here instead: stored/deflated entries, UTF-8 names, one top folder.
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (const byte of buf) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** MS-DOS date/time pair (local time, 2-second resolution). */
+function dosDateTime(date) {
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    date: ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+  };
+}
+
+function collectFiles(dir, prefix, out) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const name = `${prefix}${ent.name}`;
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) collectFiles(full, `${name}/`, out);
+    else out.push({ name, data: fs.readFileSync(full) });
+  }
+  return out;
+}
+
+function writeZip(srcDir, outFile) {
+  const top = path.basename(srcDir);
+  const files = collectFiles(srcDir, `${top}/`, []);
+  const now = dosDateTime(new Date());
+
+  mkdir(path.dirname(outFile));
+  rm(outFile);
+  const fd = fs.openSync(outFile, 'w');
+  // Central-directory records are kept in memory (46 bytes + name each); the
+  // file bodies are streamed straight to disk so a 150 MB ffmpeg.exe does not
+  // have to sit in the archive buffer too.
+  const central = [];
+  let offset = 0;
+
+  try {
+    for (const file of files) {
+      const name = Buffer.from(file.name, 'utf8');
+      const deflated = zlib.deflateRawSync(file.data, { level: 9 });
+      // Store incompressible data as-is instead of inflating it.
+      const useDeflate = deflated.length < file.data.length;
+      const body = useDeflate ? deflated : file.data;
+      const method = useDeflate ? 8 : 0;
+      const crc = crc32(file.data);
+      for (const size of [body.length, file.data.length, offset]) {
+        if (size > 0xffffffff) throw new Error(`${file.name} is too large for a non-zip64 archive`);
+      }
+
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(LOC_SIG, 0);
+      local.writeUInt16LE(20, 4); // version needed
+      local.writeUInt16LE(0x0800, 6); // UTF-8 names
+      local.writeUInt16LE(method, 8);
+      local.writeUInt16LE(now.time, 10);
+      local.writeUInt16LE(now.date, 12);
+      local.writeUInt32LE(crc, 14);
+      local.writeUInt32LE(body.length, 18);
+      local.writeUInt32LE(file.data.length, 22);
+      local.writeUInt16LE(name.length, 26);
+      local.writeUInt16LE(0, 28); // extra field length
+      fs.writeSync(fd, local);
+      fs.writeSync(fd, name);
+      fs.writeSync(fd, body);
+
+      const entry = Buffer.alloc(46);
+      entry.writeUInt32LE(CEN_SIG, 0);
+      entry.writeUInt16LE(20, 4); // version made by (MS-DOS/FAT)
+      entry.writeUInt16LE(20, 6); // version needed
+      entry.writeUInt16LE(0x0800, 8);
+      entry.writeUInt16LE(method, 10);
+      entry.writeUInt16LE(now.time, 12);
+      entry.writeUInt16LE(now.date, 14);
+      entry.writeUInt32LE(crc, 16);
+      entry.writeUInt32LE(body.length, 20);
+      entry.writeUInt32LE(file.data.length, 24);
+      entry.writeUInt16LE(name.length, 28);
+      entry.writeUInt16LE(0, 30); // extra field length
+      entry.writeUInt16LE(0, 32); // comment length
+      entry.writeUInt16LE(0, 34); // disk number start
+      entry.writeUInt16LE(0, 36); // internal attributes
+      entry.writeUInt32LE(0, 38); // external attributes
+      entry.writeUInt32LE(offset, 42);
+      central.push(entry, name);
+
+      offset += local.length + name.length + body.length;
+    }
+
+    const centralStart = offset;
+    for (const chunk of central) {
+      fs.writeSync(fd, chunk);
+      offset += chunk.length;
+    }
+    const centralSize = offset - centralStart;
+    if (files.length > 0xffff || centralStart > 0xffffffff || centralSize > 0xffffffff) {
+      throw new Error('archive too large for a non-zip64 zip');
+    }
+
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(EOCD_SIG, 0);
+    eocd.writeUInt16LE(0, 4); // this disk
+    eocd.writeUInt16LE(0, 6); // disk with central directory
+    eocd.writeUInt16LE(files.length, 8);
+    eocd.writeUInt16LE(files.length, 10);
+    eocd.writeUInt32LE(centralSize, 12);
+    eocd.writeUInt32LE(centralStart, 16);
+    eocd.writeUInt16LE(0, 20); // comment length
+    fs.writeSync(fd, eocd);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  return files.length;
+}
+
+// ── staging ────────────────────────────────────────────────────────────────
+
+async function download(url, destFile, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    console.log(`downloading ${url}${attempt > 1 ? ` (attempt ${attempt}/${attempts})` : ''}`);
+    try {
+      const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10 * 60 * 1000) });
+      if (!res.ok) throw new Error(`download failed ${res.status} ${url}`);
+      // The whole body is buffered before anything is written, so a failed or
+      // truncated download never leaves a half-file behind for the retry.
+      const buf = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(destFile, buf);
+      console.log(`  -> ${destFile} (${(buf.length / 1e6).toFixed(1)} MB)`);
+      return;
+    } catch (err) {
+      // The ffmpeg zip is ~200 MB; one dropped connection should not fail a
+      // release build.
+      if (attempt >= attempts) throw err;
+      console.warn(`  ! ${err.message} -- retrying`);
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    }
+  }
+}
+
+/**
+ * Return a local path to the archive: the env override when set, otherwise a
+ * fresh download into the staging temp directory.
+ */
+async function acquire(localZip, url, destFile) {
+  if (localZip) {
+    if (!fs.existsSync(localZip)) throw new Error(`archive not found: ${localZip}`);
+    console.log(`using local archive ${localZip}`);
+    return localZip;
+  }
+  await download(url, destFile);
+  return destFile;
+}
+
+function stageApp() {
+  console.log('staging app/ <- backend/build/');
+  if (!fs.existsSync(path.join(BUILD_DIR, 'app.mjs'))) {
+    throw new Error('backend/build/app.mjs is missing; run `npm run build` first (this script does it).');
+  }
   mkdir(APP_DIR);
-  fs.cpSync(BACKEND, APP_DIR, {
-    recursive: true,
-    filter: (src) => {
-      const base = path.basename(src);
-      if (EXCLUDE.has(base)) return false;
-      if (base.startsWith('.') && base !== '.') return false; // skip dotfiles (.gitignore, etc.)
-      return true;
-    },
-  });
+  fs.cpSync(BUILD_DIR, APP_DIR, { recursive: true });
+  if (!fs.existsSync(path.join(APP_DIR, 'dist', 'index.html'))) {
+    console.warn('  ! app/dist/index.html is missing -- the package has no WebApp.');
+  }
 }
 
-// Non-runtime dirs shipped inside published npm packages (jimp's
-// __image_snapshots__ is the worst offender -- 175-char filenames that blow
-// past Windows' 260-char path limit on extraction and abort the unzip halfway,
-// leaving the app half-staged so node crashes on launch). None of these run.
-const NM_EXCLUDE = new Set([
-  '__image_snapshots__', '__tests__', '__mocks__', '__fixtures__',
-  'test', 'tests', 'docs', 'doc', 'example', 'examples', 'coverage',
-  'node_modules', // never recurse into a nested node_modules
-]);
-function nmFilter(src) {
-  const base = path.basename(src);
-  if (NM_EXCLUDE.has(base)) return false;
-  if (base.startsWith('.') && base !== '.') return false; // .bin, .package-lock, ...
-  return true;
+async function stageNode(tmp) {
+  const target = path.join(STAGE, 'node', 'node.exe');
+  mkdir(path.dirname(target));
+  if (skipDownload) { placeholder(target); return; }
+
+  const zip = await acquire(process.env.KIKO_NODE_ZIP, NODE_URL, path.join(tmp, 'node.zip'));
+  const extracted = path.join(tmp, 'node');
+  extractZip(zip, extracted);
+  const nodeExe = findFile(extracted, 'node.exe');
+  if (!nodeExe) throw new Error('node.exe not found in the Node zip');
+  fs.copyFileSync(nodeExe, target);
+  console.log(`  staged node/node.exe (${NODE_VERSION} win-x64)`);
 }
 
-function stageNodeModules() {
-  console.log('staging node_modules (backend prod deps, Windows-native sqlite3)');
-  const nm = path.join(APP_DIR, 'node_modules');
-  // backend/node_modules (non-hoisted: sqlite3, knex, jsonwebtoken, jimp, ...)
-  fs.cpSync(path.join(BACKEND, 'node_modules'), nm, { recursive: true, filter: nmFilter });
-  // overlay root/node_modules (hoisted; root wins on overlaps -- e.g. mime@1.6.0
-  // for express/send over mime@3.0.0 from jimp). Mirrors the Containerfile layering.
-  fs.cpSync(path.join(ROOT, 'node_modules'), nm, { recursive: true, filter: nmFilter });
-}
+async function stageFfmpeg(tmp) {
+  const dir = path.join(STAGE, 'ffmpeg');
+  mkdir(dir);
+  if (skipDownload) {
+    placeholder(path.join(dir, 'ffmpeg.exe'));
+    placeholder(path.join(dir, 'ffprobe.exe'));
+    return;
+  }
 
-async function stageRuntime() {
-  const tmp = path.join(ROOT, 'package', 'windows', '.tmp');
-  rm(tmp); mkdir(tmp);
-
-  // Node 24 LTS win-x64
-  const nodeZip = path.join(tmp, 'node.zip');
-  await download(NODE_URL, nodeZip);
-  const nodeExtracted = path.join(tmp, 'node');
-  extractZip(nodeZip, nodeExtracted);
-  const nodeExe = findFile(nodeExtracted, 'node.exe');
-  if (!nodeExe) throw new Error('node.exe not found in Node zip');
-  mkdir(path.join(STAGE, 'node'));
-  fs.copyFileSync(nodeExe, path.join(STAGE, 'node', 'node.exe'));
-  console.log('  staged node/node.exe');
-
-  // ffmpeg + ffprobe (BtbN GPL)
-  const ffZip = path.join(tmp, 'ffmpeg.zip');
-  await download(FFMPEG_URL, ffZip);
-  const ffExtracted = path.join(tmp, 'ffmpeg');
-  extractZip(ffZip, ffExtracted);
-  const ffmpeg = findFile(ffExtracted, 'ffmpeg.exe');
-  const ffprobe = findFile(ffExtracted, 'ffprobe.exe');
-  if (!ffmpeg || !ffprobe) throw new Error('ffmpeg.exe/ffprobe.exe not found in ffmpeg zip');
-  mkdir(path.join(STAGE, 'ffmpeg'));
-  fs.copyFileSync(ffmpeg, path.join(STAGE, 'ffmpeg', 'ffmpeg.exe'));
-  fs.copyFileSync(ffprobe, path.join(STAGE, 'ffmpeg', 'ffprobe.exe'));
+  const zip = await acquire(process.env.KIKO_FFMPEG_ZIP, FFMPEG_URL, path.join(tmp, 'ffmpeg.zip'));
+  const extracted = path.join(tmp, 'ffmpeg');
+  extractZip(zip, extracted);
+  const ffmpeg = findFile(extracted, 'ffmpeg.exe');
+  const ffprobe = findFile(extracted, 'ffprobe.exe');
+  if (!ffmpeg || !ffprobe) throw new Error('ffmpeg.exe/ffprobe.exe not found in the ffmpeg zip');
+  fs.copyFileSync(ffmpeg, path.join(dir, 'ffmpeg.exe'));
+  fs.copyFileSync(ffprobe, path.join(dir, 'ffprobe.exe'));
   console.log('  staged ffmpeg/{ffmpeg,ffprobe}.exe');
-
-  rm(tmp);
 }
 
 function stageLauncher() {
@@ -168,30 +394,29 @@ function stageLauncher() {
 
 async function main() {
   console.log(`Packaging Kikoenai ${VERSION} for Windows x64`);
+  if (skipDownload) console.warn('\n! KIKO_SKIP_DOWNLOAD=1: the executables are placeholders, not a usable package.\n');
 
-  // 1. Build frontend (production) -> backend/dist
-  console.log('\n== 1. build frontend (prod) ==');
-  npm(['run', 'build:prod', '-w', 'frontend']);
+  // 1. Build the frontend (-> backend/dist) and the backend bundle (-> backend/build)
+  console.log('\n== 1. build ==');
+  npm(['run', 'build']);
 
-  // 2. Prod-only deps (removes devDeps; Windows-native sqlite3 .node stays).
-  // Side effect: removes dev deps from the workspace tree; run `npm install` to
-  // restore dev work locally.
-  console.log('\n== 2. prune dev deps ==');
-  npm(['prune', '--omit=dev']);
-
-  // 3. Stage the portable folder
-  console.log('\n== 3. stage ==');
-  rm(STAGE); mkdir(STAGE);
-  stageBackendSource();
-  stageNodeModules();
-  await stageRuntime();
+  // 2. Stage the portable folder
+  console.log('\n== 2. stage ==');
+  rm(STAGE_ROOT);
+  mkdir(STAGE);
+  stageApp();
+  const tmp = path.join(STAGE_ROOT, '.tmp');
+  mkdir(tmp);
+  await stageNode(tmp);
+  await stageFfmpeg(tmp);
   stageLauncher();
+  rm(tmp);
 
-  // 4. Zip
-  console.log('\n== 4. zip ==');
-  mkdir(DIST_DIR);
-  createZip(STAGE, ZIP_OUT);
-  console.log(`\nDone: ${ZIP_OUT}`);
+  // 3. Zip
+  console.log('\n== 3. zip ==');
+  const count = writeZip(STAGE, ZIP_OUT);
+  console.log(`\nDone: ${ZIP_OUT} (${count} files, ${(fs.statSync(ZIP_OUT).size / 1e6).toFixed(1)} MB)`);
+  console.log('Contents: Kikoenai/{node/node.exe, app/ (= backend/build/), ffmpeg/{ffmpeg,ffprobe}.exe, Kikoenai.bat}');
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

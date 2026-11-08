@@ -1,4 +1,4 @@
-name: Package Windows single-exe
+name: Package Windows portable zip
 
 on:
   push:
@@ -8,8 +8,11 @@ on:
 
 jobs:
   package-windows:
-    runs-on: windows-latest
-    name: Build Windows single-exe (pkg)
+    # The bundle has no native modules any more, so the portable package is
+    # assembled on Linux: the only Windows binaries in it (node.exe, ffmpeg,
+    # ffprobe) are downloaded prebuilt.
+    runs-on: ubuntu-latest
+    name: Build Windows portable zip
     env:
       # Tag-triggered builds name the zip after the tag (vX.Y.Z -> X.Y.Z), the
       # source of truth for releases; backend/package.json may lag behind tags.
@@ -21,30 +24,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Node 24 LTS
+      - name: Use Node.js 26
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
-      # Full install (dev + prod) -- needed to build the frontend (Quasar toolchain).
-      # Node 24 LTS (Krypton).
+      # Full install (dev + prod) -- needed to build the frontend (Quasar
+      # toolchain) and to bundle the backend (esbuild).
       - name: Install dependencies
         run: npm ci
 
-      # scripts/pkg-package.js: builds frontend (prod), prunes dev deps, stages
-      # the sqlite3 binding at pkg's first-candidate path, builds ONE Kikoenai.exe
-      # via @yao-pkg/pkg (Node 24 win-x64 base), then stages it beside standalone
-      # ffmpeg/ffprobe + the launcher bat + data dirs, and zips it.
-      - name: Package Windows single-exe
+      # scripts/package.js: builds the frontend and the backend bundle, then
+      # stages node/node.exe (pinned Node 26 win-x64), app/ (= backend/build/),
+      # ffmpeg/{ffmpeg,ffprobe}.exe and the launcher bat, and zips the folder.
+      - name: Package Windows portable zip
         run: npm run package:windows
 
       - name: Upload staged folder artifact
         uses: actions/upload-artifact@v7
         with:
           name: Kikoenai-windows-x64
-          path: package/windows-exe/Kikoenai
+          path: package/windows/Kikoenai
           if-no-files-found: error
           retention-days: 30
 
@@ -53,7 +55,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          files: package/dist/Kikoenai-exe-windows-x64-*.zip
+          files: package/dist/Kikoenai-windows-x64-*.zip
           # Publish straight away; notes are GitHub's generated list of PRs
           # merged since the previous tag, so land features via PR to see them.
           draft: false

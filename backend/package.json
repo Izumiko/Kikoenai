@@ -28,21 +28,6 @@
     "bench": "node --import ./test/setup-env.ts test/benchmark.ts",
     "test:bundle": "node --import ./test/setup-env.ts --test --test-concurrency=1 test/bundle-smoke.ts"
   },
-  "bin": "app.ts",
-  "pkg": {
-    "scripts": [
-      "filesystem/scanner.js",
-      "filesystem/updater.js",
-      "filesystem/workFileScanner.js",
-      "database/migrations/*.js"
-    ],
-    "assets": [
-      "dist/**/*",
-      "static/**/*",
-      "scraper/tag-aliases.json"
-    ],
-    "outputPath": "package"
-  },
   "author": "Watanuki-Kimihiro",
   "contributors": [
     "umonaca <mw2010a@gmail.com>"

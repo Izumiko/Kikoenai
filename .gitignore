@@ -114,3 +114,6 @@ packages/*/package-lock.json
 .pi-subagents/
 
 CLAUDE.md
+
+# Windows portable package output (scripts/package.js)
+/package/

@@ -1,8 +1,8 @@
 name: Build Debug Container (manual)
 
-# Manual only. The debug image ships an unminified bundle with source maps and
-# is never built automatically -- run this from the Actions tab on whichever
-# branch or tag you want to debug.
+# Manual only. The debug image ships an unminified frontend + backend bundle
+# with source maps and is never built automatically -- run this from the
+# Actions tab on whichever branch or tag you want to debug.
 on:
   workflow_dispatch:
 
@@ -18,22 +18,10 @@ jobs:
       - name: Checkout full repository
         uses: actions/checkout@v7
 
-      # ── Frontend ──────────────────────────────────────────────
-      - name: Use Node.js for frontend
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci -w frontend
-
-      - name: Build frontend (debug)
-        run: npm run build
-        working-directory: frontend
-
       # ── Container image ───────────────────────────────────────
+      # Same in-image build as build.yml, but KIKO_DEBUG=1 switches the build
+      # stage to the debug frontend build and the unminified backend bundle
+      # with source maps (see Containerfile).
       - name: Generate image metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -69,6 +57,9 @@ jobs:
           context: ./
           containerfiles: |
             ./Containerfile
+          # Debug build: unminified WebApp and backend bundle, with source maps.
+          build-args: |
+            KIKO_DEBUG=1
           oci: true
 
       - name: Push image to GitHub Container Registry

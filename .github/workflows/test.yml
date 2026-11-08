@@ -1,0 +1,38 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use Node.js 26
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Lint (backend ESLint), typecheck (tsc) and the node:test suite.
+      - name: Lint, typecheck and unit tests
+        run: npm test -w backend
+
+      # quasar.config.js emits into backend/dist, so this also gives the bundle
+      # below a WebApp to carry.
+      - name: Build frontend
+        run: npm run build -w frontend
+
+      # Builds backend/build/ and boots it from a directory outside the repo
+      # with no node_modules, then exercises the health endpoint, the forked
+      # scanner and the maintenance CLIs.
+      - name: Bundle smoke test
+        run: npm run test:bundle -w backend
