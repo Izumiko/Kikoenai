@@ -42,6 +42,12 @@ jobs:
       - name: Package Windows portable zip
         run: npm run package:windows
 
+      # The zip is written by hand in scripts/package.js, so let the platform's
+      # unzip check the central directory and every entry's CRC before the
+      # archive is uploaded or attached to a release.
+      - name: Verify the zip
+        run: unzip -t package/dist/*.zip
+
       - name: Upload staged folder artifact
         uses: actions/upload-artifact@v7
         with:

@@ -26,6 +26,11 @@ jobs:
       - name: Lint, typecheck and unit tests
         run: npm test -w backend
 
+      # Round-trip test for the hand-written zip writer/reader the Windows
+      # release archive is produced with (scripts/package.js).
+      - name: Test the package zip
+        run: npm run test:package
+
       # quasar.config.js emits into backend/dist, so this also gives the bundle
       # below a WebApp to carry.
       - name: Build frontend

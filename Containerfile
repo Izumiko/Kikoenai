@@ -32,14 +32,14 @@ RUN npm ci --ignore-scripts
 COPY ./backend/ ./backend/
 COPY ./frontend/ ./frontend/
 
-# 0 = production build (minified backend bundle), 1 = debug build (unminified,
-# with source maps). Both build the frontend and bundle the backend; only the
-# two npm scripts change.
+# 0 = production build (production WebApp + minified backend bundle), 1 = debug
+# build (both unminified, with source maps). The root `build:prod` script is the
+# same production build scripts/package.js uses for the Windows release.
 ARG KIKO_DEBUG=0
 RUN if [ "$KIKO_DEBUG" = "1" ]; then \
       npm run build -w frontend && npm run build -w backend -- --debug; \
     else \
-      npm run build:prod -w frontend && npm run build -w backend; \
+      npm run build:prod; \
     fi
 
 # Final stage

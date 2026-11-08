@@ -12,7 +12,9 @@
 //
 // The user unzips it and double-clicks Kikoenai.bat; no Node/ffmpeg on PATH
 // needed. Nothing in the bundle is native, so this runs on ANY host OS and the
-// only Windows binaries are downloaded prebuilt.
+// only Windows binaries are downloaded prebuilt. The app is built first with
+// the repo-root `build:prod` script -- a production WebApp (no source maps) plus
+// the minified backend bundle, exactly what the release image ships.
 //
 //   npm run package:windows
 //
@@ -26,7 +28,9 @@
 //   KIKO_FFMPEG_ZIP=<path>   use a local ffmpeg win64 .zip instead of downloading.
 //
 // Stdlib only -- no dependencies, and the zip is written/read by hand so the
-// script works identically on Linux, macOS and Windows.
+// script works identically on Linux, macOS and Windows. The zip helpers are
+// exported for scripts/package.test.mjs (`npm run test:package`); importing
+// this file does not run the packager.
 'use strict';
 
 const fs = require('node:fs');
@@ -204,9 +208,18 @@ function collectFiles(dir, prefix, out) {
     const name = `${prefix}${ent.name}`;
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) collectFiles(full, `${name}/`, out);
-    else out.push({ name, data: fs.readFileSync(full) });
+    // Only the path is kept: the bodies are read one at a time while writing.
+    else out.push({ name, path: full });
   }
   return out;
+}
+
+/** Write a whole buffer: writeSync may return a short count. */
+function writeFully(fd, buf) {
+  let written = 0;
+  while (written < buf.length) {
+    written += fs.writeSync(fd, buf, written, buf.length - written);
+  }
 }
 
 function writeZip(srcDir, outFile) {
@@ -217,22 +230,23 @@ function writeZip(srcDir, outFile) {
   mkdir(path.dirname(outFile));
   rm(outFile);
   const fd = fs.openSync(outFile, 'w');
-  // Central-directory records are kept in memory (46 bytes + name each); the
-  // file bodies are streamed straight to disk so a 150 MB ffmpeg.exe does not
-  // have to sit in the archive buffer too.
+  // Central-directory records are kept in memory (46 bytes + name each); each
+  // file body is read, deflated and written one at a time, so a 150 MB
+  // ffmpeg.exe never has to sit in the archive buffer too.
   const central = [];
   let offset = 0;
 
   try {
     for (const file of files) {
+      const data = fs.readFileSync(file.path);
       const name = Buffer.from(file.name, 'utf8');
-      const deflated = zlib.deflateRawSync(file.data, { level: 9 });
+      const deflated = zlib.deflateRawSync(data, { level: 9 });
       // Store incompressible data as-is instead of inflating it.
-      const useDeflate = deflated.length < file.data.length;
-      const body = useDeflate ? deflated : file.data;
+      const useDeflate = deflated.length < data.length;
+      const body = useDeflate ? deflated : data;
       const method = useDeflate ? 8 : 0;
-      const crc = crc32(file.data);
-      for (const size of [body.length, file.data.length, offset]) {
+      const crc = crc32(data);
+      for (const size of [body.length, data.length, offset]) {
         if (size > 0xffffffff) throw new Error(`${file.name} is too large for a non-zip64 archive`);
       }
 
@@ -245,12 +259,12 @@ function writeZip(srcDir, outFile) {
       local.writeUInt16LE(now.date, 12);
       local.writeUInt32LE(crc, 14);
       local.writeUInt32LE(body.length, 18);
-      local.writeUInt32LE(file.data.length, 22);
+      local.writeUInt32LE(data.length, 22);
       local.writeUInt16LE(name.length, 26);
       local.writeUInt16LE(0, 28); // extra field length
-      fs.writeSync(fd, local);
-      fs.writeSync(fd, name);
-      fs.writeSync(fd, body);
+      writeFully(fd, local);
+      writeFully(fd, name);
+      writeFully(fd, body);
 
       const entry = Buffer.alloc(46);
       entry.writeUInt32LE(CEN_SIG, 0);
@@ -262,7 +276,7 @@ function writeZip(srcDir, outFile) {
       entry.writeUInt16LE(now.date, 14);
       entry.writeUInt32LE(crc, 16);
       entry.writeUInt32LE(body.length, 20);
-      entry.writeUInt32LE(file.data.length, 24);
+      entry.writeUInt32LE(data.length, 24);
       entry.writeUInt16LE(name.length, 28);
       entry.writeUInt16LE(0, 30); // extra field length
       entry.writeUInt16LE(0, 32); // comment length
@@ -277,7 +291,7 @@ function writeZip(srcDir, outFile) {
 
     const centralStart = offset;
     for (const chunk of central) {
-      fs.writeSync(fd, chunk);
+      writeFully(fd, chunk);
       offset += chunk.length;
     }
     const centralSize = offset - centralStart;
@@ -294,7 +308,7 @@ function writeZip(srcDir, outFile) {
     eocd.writeUInt32LE(centralSize, 12);
     eocd.writeUInt32LE(centralStart, 16);
     eocd.writeUInt16LE(0, 20); // comment length
-    fs.writeSync(fd, eocd);
+    writeFully(fd, eocd);
   } finally {
     fs.closeSync(fd);
   }
@@ -343,13 +357,15 @@ async function acquire(localZip, url, destFile) {
 function stageApp() {
   console.log('staging app/ <- backend/build/');
   if (!fs.existsSync(path.join(BUILD_DIR, 'app.mjs'))) {
-    throw new Error('backend/build/app.mjs is missing; run `npm run build` first (this script does it).');
+    throw new Error('backend/build/app.mjs is missing; `npm run build:prod` should have produced it.');
+  }
+  // A release without the WebApp is broken, not merely incomplete: fail instead
+  // of shipping an archive that only serves the API.
+  if (!fs.existsSync(path.join(BUILD_DIR, 'dist', 'index.html'))) {
+    throw new Error('backend/build/dist/index.html is missing; the frontend build did not produce a WebApp.');
   }
   mkdir(APP_DIR);
   fs.cpSync(BUILD_DIR, APP_DIR, { recursive: true });
-  if (!fs.existsSync(path.join(APP_DIR, 'dist', 'index.html'))) {
-    console.warn('  ! app/dist/index.html is missing -- the package has no WebApp.');
-  }
 }
 
 async function stageNode(tmp) {
@@ -396,9 +412,10 @@ async function main() {
   console.log(`Packaging Kikoenai ${VERSION} for Windows x64`);
   if (skipDownload) console.warn('\n! KIKO_SKIP_DOWNLOAD=1: the executables are placeholders, not a usable package.\n');
 
-  // 1. Build the frontend (-> backend/dist) and the backend bundle (-> backend/build)
+  // 1. Production frontend (-> backend/dist) and the minified backend bundle
+  //    (-> backend/build). build:prod, not build: the latter is the debug WebApp.
   console.log('\n== 1. build ==');
-  npm(['run', 'build']);
+  npm(['run', 'build:prod']);
 
   // 2. Stage the portable folder
   console.log('\n== 2. stage ==');
@@ -419,4 +436,10 @@ async function main() {
   console.log('Contents: Kikoenai/{node/node.exe, app/ (= backend/build/), ffmpeg/{ffmpeg,ffprobe}.exe, Kikoenai.bat}');
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+// Exported for scripts/package.test.mjs (`npm run test:package`). The packager
+// itself only runs when this file is executed, not when it is imported.
+module.exports = { writeZip, readZipEntries, extractZip };
+
+if (require.main === module) {
+  main().catch((err) => { console.error(err); process.exit(1); });
+}

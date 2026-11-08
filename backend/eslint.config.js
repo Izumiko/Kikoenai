@@ -63,12 +63,18 @@ export default [
       'n/no-extraneous-import': 'off',
       'n/no-extraneous-require': 'off',
       'n/no-unpublished-require': 'off',
-      // app.ts keeps upstream app.js's `#!/usr/bin/env node` first line, but
-      // backend/package.json no longer declares a `bin` (the bundle is started
-      // with `node build/app.mjs`, see scripts/build.ts). The rule requires a
-      // shebang exactly on bin scripts and forbids it everywhere else, so with
-      // the bin entry gone it has nothing left to check against. The shebang is
-      // inert under `node app.ts` and keeps `./app.ts` directly executable.
+    },
+  },
+  // app.ts keeps upstream app.js's `#!/usr/bin/env node` first line, but
+  // backend/package.json no longer declares a `bin` (the bundle is started with
+  // `node build/app.mjs`, see scripts/build.ts). `n/hashbang` requires a shebang
+  // exactly on bin scripts and forbids it everywhere else, so with the bin entry
+  // gone it can only complain. The shebang is inert under `node app.ts` and
+  // keeps `./app.ts` directly executable. Scoped to the one file on purpose --
+  // a shebang anywhere else is still an error.
+  {
+    files: ['app.ts'],
+    rules: {
       'n/hashbang': 'off',
     },
   },
