@@ -17,7 +17,7 @@ const supportedMediaExtList = ['.mp3', '.ogg', '.opus', '.wav', '.aac', '.flac',
 const supportedSubtitleExtList = ['.lrc', '.srt', '.ass', ".vtt"]; // '.ass' only support show on file list, not for play lyric
 const supportedImageExtList = ['.jpg', '.jpeg', '.png', '.webp'];
 
-import LimitPromise from 'limit-promise'; // 限制并发数量
+import LimitPromise from '../lib/limit-promise.ts'; // 限制并发数量
 const limitP = new LimitPromise(config.maxParallelism); // 核心控制器
 import util from 'util';
 import childProcess from 'child_process';

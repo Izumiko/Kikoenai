@@ -2,7 +2,7 @@
 // Sample/description image download and DLsite review scraping.
 
 import fs from 'fs';
-import LimitPromise from 'limit-promise';
+import LimitPromise from '../lib/limit-promise.ts';
 
 import axios from '../scraper/axios.ts';
 import db from '../database/db.ts';

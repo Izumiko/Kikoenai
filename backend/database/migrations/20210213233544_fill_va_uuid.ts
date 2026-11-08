@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { v5 as uuidv5 } from 'uuid';
+import { uuidv5 } from '../../lib/uuid-v5.ts';
 
 export const up = async function(knex) {
   const nameToUUID = (name) => {

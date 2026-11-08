@@ -1,9 +1,9 @@
 // @ts-nocheck
 
-import md5 from 'md5';
+import { createHash } from 'crypto';
 
 import { config } from '../config.ts';
 
-const cmd5 = (str) => md5(str + config.md5secret);
+const cmd5 = (str) => createHash('md5').update(str + config.md5secret).digest('hex');
 
 export { cmd5 as md5 };

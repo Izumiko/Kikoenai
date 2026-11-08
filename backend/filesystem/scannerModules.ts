@@ -2,7 +2,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import LimitPromise from 'limit-promise'; // 限制并发数量
+import LimitPromise from '../lib/limit-promise.ts'; // 限制并发数量
 
 import axios from '../scraper/axios.ts'; // 数据请求
 import { scrapeWorkMetadataFromDLsite, scrapeWorkMetadataFromDLsiteJson, scrapeDynamicWorkMetadataFromDLsite, scrapeCoverIdForTranslatedWorkFromDLsite } from '../scraper/dlsite.ts';

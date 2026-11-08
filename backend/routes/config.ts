@@ -1,12 +1,11 @@
 // @ts-nocheck
 
-import _ from 'lodash'; 
 import express from 'express';
 const router = express.Router();
 import { config, setConfig, sharedConfigHandle } from '../config.ts';
 
 const filterConfig = (_config, option = 'read') => {
-  const configClone = _.cloneDeep(_config);
+  const configClone = structuredClone(_config);
   delete configClone.md5secret;
   delete configClone.jwtsecret;
   if (option === 'write') {

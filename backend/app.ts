@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // @ts-nocheck
-// Side-effect import: dotenv/config() must run before config.ts reads
-// process.env, and ESM evaluates imports in source order.
-import 'dotenv/config';
+// Side-effect import: .env must be loaded before config.ts reads process.env,
+// and ESM evaluates imports in source order. See lib/load-env.ts.
+import './lib/load-env.ts';
 import path from 'path';
 import express from 'express';
 

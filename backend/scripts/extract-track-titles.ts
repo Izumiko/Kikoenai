@@ -35,9 +35,9 @@
 
 import path from 'path';
 import readline from 'readline/promises';
-import yargs from 'yargs/yargs';
-import { hideBin } from 'yargs/helpers';
+import { parseArgs } from 'util';
 
+import pjson from '../package.json' with { type: 'json' };
 import db from '../database/db.ts';
 import { config } from '../config.ts';
 import { formatID } from '../filesystem/utils.ts';
@@ -45,17 +45,65 @@ import { listWorkTracks } from '../filesystem/workFiles.ts';
 import { isFanzaId, canonicalizeWorkId } from '../work-id.ts';
 import { AUDIO_EXT, isLlmConfigured, isUninformative, htmlToText, structuredTitles, distinctTrackNames, buildHaystack, buildPrompt, callModel, validate } from '../track-titles.ts';
 
-const argv = yargs(hideBin(process.argv))
-  .usage('$0 <workId> [options]')
-  .command('$0 <workId>', 'Extract track titles for one work', y => y.positional('workId', {
-    type: 'string',
-    description: "Work id: RJ01234567, 01234567, or Fanza d215444",
-  }))
-  .option('dry-run', { type: 'boolean', description: 'Print, then ask before writing' })
-  .option('force', { type: 'boolean', description: 'Overwrite titles this work already has' })
-  .demandCommand(0)
-  .strict()
-  .argv;
+const USAGE = [
+  'Usage: extract-track-titles <workId> [options]',
+  '',
+  'Extract track titles for one work',
+  '',
+  'Positionals:',
+  '  workId  Work id: RJ01234567, 01234567, or Fanza d215444',
+  '',
+  'Options:',
+  '  --help     Show help',
+  '  --version  Show version',
+  '  --dry-run  Print, then ask before writing',
+  '  --force    Overwrite titles this work already has',
+].join('\n');
+
+const usageError = (message) => {
+  console.error(USAGE);
+  console.error(message);
+  process.exit(1);
+};
+
+let parsed;
+try {
+  parsed = parseArgs({
+    args: process.argv.slice(2),
+    allowPositionals: true,
+    strict: true,
+    options: {
+      help: { type: 'boolean' },
+      version: { type: 'boolean' },
+      'dry-run': { type: 'boolean' },
+      force: { type: 'boolean' },
+    },
+  });
+} catch (err) {
+  usageError(err.message);
+}
+
+if (parsed.values.help) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
+if (parsed.values.version) {
+  console.log(pjson.version);
+  process.exit(0);
+}
+
+if (!parsed.positionals.length) {
+  usageError('Missing required argument: workId');
+}
+
+// Same shape as the yargs object this replaced: the positional under `workId`
+// and camelCase keys for the flags.
+const argv = {
+  workId: parsed.positionals[0],
+  force: parsed.values.force === true,
+  dryRun: parsed.values['dry-run'] === true,
+};
 
 /**
  * Accept the id in whatever shape it was copied from -- a DLsite URL, the work

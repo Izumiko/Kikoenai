@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 import path from 'path';
-import urljoin from 'url-join';
+import urljoin from '../../lib/url-join.ts';
 
 // work.dir and track.subtitle may contain '/' or '\' if they have subfolders
 // ["RJ123456", "画像/好きな人?"] => ["RJ123456", "%E7%94%BB%E5%83%8F", "%E5%A5%BD%E3%81%8D%E3%81%AA%E4%BA%BA%3F"]

@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { v5 as uuidv5 } from 'uuid';
+import { uuidv5 } from '../lib/uuid-v5.ts';
 
 const nameToUUID = (name) => {
   const namespace =  '699d9c07-b965-4399-bafd-18a3cacf073c';
