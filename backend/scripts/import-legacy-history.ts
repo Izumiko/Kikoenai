@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * One-off importer for play history from a kikoeru-project era database.
  *
@@ -42,9 +41,9 @@
  * work-relative path, which comes straight off the directory listing.
  *
  * Usage:
- *   node ./scripts/import-legacy-history.js ../old_sqlite/db.sqlite3 --dry-run
- *   node ./scripts/import-legacy-history.js ../old_sqlite/db.sqlite3
- *   node ./scripts/import-legacy-history.js <old.sqlite3> [--dry-run] [--overwrite]
+ *   node ./scripts/import-legacy-history.ts ../old_sqlite/db.sqlite3 --dry-run
+ *   node ./scripts/import-legacy-history.ts ../old_sqlite/db.sqlite3
+ *   node ./scripts/import-legacy-history.ts <old.sqlite3> [--dry-run] [--overwrite]
  *                                           [--user <name>] [--map-user <old>=<new>]
  */
 
@@ -55,6 +54,9 @@ import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { config } from '../config.ts';
 import { formatID } from '../filesystem/utils.ts';
 import { listWorkTracks } from '../filesystem/workFiles.ts';
+import type { WorkFilesDb } from '../filesystem/workFiles.ts';
+import type { ReviewRow, WorkRow } from '../types/db.ts';
+import type { Track } from '../types/track.ts';
 
 // Same threshold the player uses to call a track finished.
 const COMPLETE_RATIO = 0.95;
@@ -71,13 +73,13 @@ const NON_AUDIO_EXT = new Set([
   '.pdf',
 ]);
 
-const stem = (name) => {
+const stem = (name: string): string => {
   const i = name.lastIndexOf('.');
   return i > 0 ? name.slice(0, i) : name;
 };
 
 /** Old ids were bare integers; the current schema stores them zero-padded. */
-const toCanonicalId = (oldId) => formatID(parseInt(String(oldId), 10));
+const toCanonicalId = (oldId: string | number): string => formatID(parseInt(String(oldId), 10));
 
 /**
  * Project a track onto the shape the frontend's toQueueItem() produces. The
@@ -86,12 +88,40 @@ const toCanonicalId = (oldId) => formatID(parseInt(String(oldId), 10));
  * from trackId, and a present-but-default value shadows the offline-copy
  * branch in AudioElement.
  */
-const toQueueItem = (track, workTitle) => ({
+/** One entry of the queue state blob the player re-uploads. */
+interface QueueItem {
+  trackId: string;
+  title: string;
+  duration: number | undefined;
+  workTitle: string;
+}
+
+const toQueueItem = (track: Track, workTitle: string): QueueItem => ({
   trackId: track.trackId,
   title: track.title,
   duration: track.duration,
   workTitle,
 });
+
+/** One row of the old repository's per-file t_history table. */
+interface LegacyHistoryRow {
+  user_name: string;
+  work_id: string | number;
+  file_name: string;
+  play_time: number;
+  total_time: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One row of the old repository's t_review table. */
+interface LegacyReviewRow {
+  user_name: string;
+  work_id: string | number;
+  rating: number | null;
+  review_text: string | null;
+  progress: string | null;
+}
 
 
 /**
@@ -99,7 +129,7 @@ const toQueueItem = (track, workTitle) => ({
  * Returns an array -- a name present in both an SE-on and an SE-off folder
  * legitimately resolves to two tracks. Empty means no confident match.
  */
-function matchTracks(oldRow, tracks) {
+function matchTracks(oldRow: LegacyHistoryRow, tracks: Track[]): Track[] {
   const wanted = stem(oldRow.file_name);
   const byName = tracks.filter(t => stem(t.title) === wanted);
 
@@ -122,7 +152,23 @@ function matchTracks(oldRow, tracks) {
   return byDuration.length === 1 ? byDuration : [];
 }
 
-async function runImport({
+/** The slice of the database the importer reads and writes. */
+type ImportDb = WorkFilesDb & Pick<typeof db, 'upsertTrackProgress' | 'updateUserReview'>;
+
+/** The columns the importer reads from one current work row. */
+type WorkSelectRow = Pick<WorkRow, 'id' | 'title' | 'root_folder' | 'dir'>;
+
+interface ImportOptions {
+  oldDbPath: string;
+  dryRun?: boolean;
+  overwrite?: boolean;
+  userMap?: Record<string, string>;
+  onlyUser?: string | null;
+  log?: (message: string) => void;
+  dbApi?: ImportDb;
+}
+
+async function runImport ({
   oldDbPath,
   dryRun = false,
   overwrite = false,
@@ -130,7 +176,7 @@ async function runImport({
   onlyUser = null,
   log = (m) => console.log(m),
   dbApi = db,
-} = {}) {
+}: ImportOptions) {
   // Read-only would be nicer, but a read-only handle turns a mistyped path
   // into a hard error instead of an empty database. Only SELECTs are ever
   // issued against this handle.
@@ -152,30 +198,31 @@ async function runImport({
   try {
     log(`[import-legacy-history] Reading ${oldDbPath}${dryRun ? ' (DRY RUN)' : ''}`);
 
-    let oldRows = await oldKnex('t_history')
+    let oldRows: LegacyHistoryRow[] = await oldKnex('t_history')
       .select('user_name', 'work_id', 'file_name', 'play_time', 'total_time', 'created_at', 'updated_at');
     if (onlyUser) oldRows = oldRows.filter(r => r.user_name === onlyUser);
     summary.historyRows = oldRows.length;
 
     // Index the current library once: work row + resolved absolute directory.
-    const workRows = await dbApi.knex('t_work').select('id', 'title', 'root_folder', 'dir');
+    const workRows: WorkSelectRow[] = await dbApi.knex('t_work').select('id', 'title', 'root_folder', 'dir');
     const works = new Map(workRows.map(w => [w.id, w]));
 
-    const existingProgress = new Set(
+    const existingProgress = new Set<string>(
       (await dbApi.knex('t_track_progress').select('user_name', 'work_id', 'track_key'))
         .map(r => `${r.user_name}\u0000${r.work_id}\u0000${r.track_key}`));
-    const existingHistory = new Set(
+    const existingHistory = new Set<string>(
       (await dbApi.knex('t_play_history').select('user_name', 'work_id'))
         .map(r => `${r.user_name}\u0000${r.work_id}`));
 
     // Group by (user, work): one t_play_history row and one getTrackList call each.
-    const groups = new Map();
+    const groups = new Map<string, { user: string; workId: string; rows: LegacyHistoryRow[] }>();
     for (const row of oldRows) {
       const user = userMap[row.user_name] || row.user_name;
       const workId = toCanonicalId(row.work_id);
       const key = `${user}\u0000${workId}`;
       if (!groups.has(key)) groups.set(key, { user, workId, rows: [] });
-      groups.get(key).rows.push(row);
+      // The `has` check above guarantees the entry.
+      groups.get(key)!.rows.push(row);
     }
     summary.worksTotal = groups.size;
 
@@ -195,21 +242,21 @@ async function runImport({
       }
       const workDir = path.join(rootFolder.path, work.dir);
 
-      let tracks;
+      let tracks: Track[];
       try {
         tracks = (await listWorkTracks(workId, workDir, { dbApi }))
           .filter(t => !NON_AUDIO_EXT.has(t.ext));
       } catch (err) {
         summary.worksFailed++;
-        log(`  [ERR ] work ${workId} -- cannot read ${workDir}: ${err.message}`);
+        log(`  [ERR ] work ${workId} -- cannot read ${workDir}: ${(err as Error).message}`);
         continue;
       }
 
       // --- t_track_progress: one row per matched track ---
       // Oldest first, so the final iteration also identifies the anchor.
       rows.sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)));
-      let anchor = null;
-      let anchorRow = null;
+      let anchor: Track | null = null;
+      let anchorRow: LegacyHistoryRow | null = null;
 
       for (const row of rows) {
         const matched = matchTracks(row, tracks);
@@ -246,7 +293,8 @@ async function runImport({
 
       // --- t_play_history: the "recently played" entry, anchored on the last
       // track the user actually played, with that folder's queue rebuilt. ---
-      if (!anchor) continue;
+      // `anchorRow` is always set in the same iteration as `anchor`.
+      if (!anchor || !anchorRow) continue;
       if (existingHistory.has(`${user}\u0000${workId}`) && !overwrite) {
         summary.playHistorySkipped++;
         continue;
@@ -255,7 +303,7 @@ async function runImport({
       // The whole folder, not just the tracks the legacy rows named: the queue
       // is what the player advances through, and the resume-from-history path
       // never refetches the tree.
-      const queue = [];
+      const queue: QueueItem[] = [];
       for (const t of tracks.filter(t => t.subtitle === anchor.subtitle)) {
         queue.push(toQueueItem(t, work.title));
       }
@@ -281,7 +329,7 @@ async function runImport({
     }
 
     // --- t_review: ratings, review text and progress, filling gaps only ---
-    let oldReviews = await oldKnex('t_review')
+    let oldReviews: LegacyReviewRow[] = await oldKnex('t_review')
       .select('user_name', 'work_id', 'rating', 'review_text', 'progress');
     if (onlyUser) oldReviews = oldReviews.filter(r => r.user_name === onlyUser);
 
@@ -295,14 +343,15 @@ async function runImport({
       const progress = r.progress || null;
       if (rating === null && !reviewText && progress === null) continue;
 
-      const current = await dbApi.knex('t_review')
-        .select('rating', 'review_text', 'progress')
-        .where({ user_name: user, work_id: workId }).first();
+      const current: Pick<ReviewRow, 'rating' | 'review_text' | 'progress'> | undefined =
+        await dbApi.knex('t_review')
+          .select('rating', 'review_text', 'progress')
+          .where({ user_name: user, work_id: workId }).first();
 
       // Never clobber something the user has set since. Each field is filled
       // independently, so a work that already has a rating can still receive
       // its old progress.
-      const keep = (currentValue, oldValue) =>
+      const keep = <T>(currentValue: T, oldValue: T): T =>
         (overwrite ? (oldValue ?? currentValue) : (currentValue ?? oldValue));
       const merged = {
         rating: keep(current && current.rating !== null ? current.rating : null, rating),
@@ -355,11 +404,11 @@ if (import.meta.main) {
     console.error('Usage: node ./scripts/import-legacy-history.js <old-db.sqlite3> [--dry-run] [--overwrite] [--user <name>] [--map-user <old>=<new>]');
     process.exit(1);
   }
-  const valueOf = (flag) => {
+  const valueOf = (flag: string): string | null => {
     const i = args.indexOf(flag);
     return i === -1 ? null : args[i + 1];
   };
-  const userMap = {};
+  const userMap: Record<string, string> = {};
   args.forEach((a, i) => {
     if (a === '--map-user' && args[i + 1]) {
       const [from, to] = args[i + 1].split('=');

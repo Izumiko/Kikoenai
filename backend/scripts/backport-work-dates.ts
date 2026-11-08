@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Restore "date added to library" from a kikoeru-project era database.
  *
@@ -22,8 +21,8 @@
  * refreshed", which has nothing to do with acquisition.
  *
  * Usage:
- *   node ./scripts/backport-work-dates.js ../old_sqlite/db.sqlite3 --dry-run
- *   node ./scripts/backport-work-dates.js ../old_sqlite/db.sqlite3
+ *   node ./scripts/backport-work-dates.ts ../old_sqlite/db.sqlite3 --dry-run
+ *   node ./scripts/backport-work-dates.ts ../old_sqlite/db.sqlite3
  */
 
 import path from 'path';
@@ -31,13 +30,30 @@ import Knex from 'knex';
 import db from '../database/db.ts';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { formatID } from '../filesystem/utils.ts';
+import type { WorkRow } from '../types/db.ts';
 
-async function runBackport({
+/** One row of the kikoeru-project era t_work table, which carried insert_time. */
+interface LegacyWorkRow {
+  id: string | number;
+  insert_time: string;
+}
+
+/** The slice of the database this backport touches. */
+type BackportDb = Pick<typeof db, 'knex'>;
+
+interface BackportOptions {
+  oldDbPath: string;
+  dryRun?: boolean;
+  log?: (message: string) => void;
+  dbApi?: BackportDb;
+}
+
+async function runBackport ({
   oldDbPath,
   dryRun = false,
   log = (m) => console.log(m),
   dbApi = db,
-} = {}) {
+}: BackportOptions) {
   // Read-only would be nicer, but a read-only handle turns a mistyped path
   // into a hard error instead of an empty database. Only SELECTs are issued
   // here.
@@ -52,13 +68,14 @@ async function runBackport({
   try {
     log(`[backport-work-dates] Reading ${oldDbPath}${dryRun ? ' (DRY RUN)' : ''}`);
 
-    const legacy = await oldKnex('t_work').select('id', 'insert_time').whereNotNull('insert_time');
+    const legacy: LegacyWorkRow[] = await oldKnex('t_work').select('id', 'insert_time').whereNotNull('insert_time');
     summary.legacyRows = legacy.length;
 
-    const current = new Map(
-      (await dbApi.knex('t_work').select('id', 'created_at')).map(w => [w.id, w.created_at]));
+    const currentRows: Array<Pick<WorkRow, 'id' | 'created_at'>> =
+      await dbApi.knex('t_work').select('id', 'created_at');
+    const current = new Map(currentRows.map(w => [w.id, w.created_at]));
 
-    const updates = [];
+    const updates: Array<{ workId: string; from: string; to: string }> = [];
     for (const row of legacy) {
       const workId = formatID(parseInt(String(row.id), 10));
       const currentDate = current.get(workId);

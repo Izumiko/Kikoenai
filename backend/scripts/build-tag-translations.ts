@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Preseed frontend/src/i18n/tags/{zh-CN,en-US,zh-TW}.json from DLsite's localized
 // genre lists. REQUIRES YOUR PROXY (127.0.0.1:1080 via config/config.json — the
 // same proxy build-tag-aliases.js uses).
@@ -17,7 +16,7 @@
 // are added; removed genres stay (harmless — unused keys are ignored). Delete
 // the JSON file to regenerate from scratch.
 //
-//   cd backend && node scripts/build-tag-translations.js
+//   cd backend && node scripts/build-tag-translations.ts
 
 import * as cheerio from 'cheerio';
 import fs from 'fs';
@@ -26,7 +25,7 @@ import { execSync } from 'child_process';
 import axios from '../scraper/axios.ts'; // proxy-aware, with retry
 
 const FLOOR = 'maniax'; // doujin R18 — matches the scraper. Alt: 'pro' (commercial games, same genre ids, different listed subset)
-const GENRE_LIST = (locale) =>
+const GENRE_LIST = (locale: string | null) =>
   `https://www.dlsite.com/${FLOOR}/genre/list` + (locale ? `?locale=${locale}` : '');
 
 const OLD_DB = path.join(import.meta.dirname, '..', 'database', 'old_tag_id.sqlite3');
@@ -34,15 +33,15 @@ const TAGS_DIR = path.join(import.meta.dirname, '..', '..', 'frontend', 'src', '
 
 // Strip leading ranking digits ("7悪堕ち" -> "悪堕ち") and trailing work counts
 // ("ASMR(44,024)" -> "ASMR") from the hot-keywords sidebar links.
-function cleanGenreName(raw) {
+function cleanGenreName(raw: string): string {
   let name = raw.replace(/^\d+/, '').trim();
   name = name.replace(/\(\d[\d,]*\)$/, '').trim();
   return name;
 }
 
-function getOldIdToName() {
+function getOldIdToName(): Map<number, string> {
   const rows = execSync(`sqlite3 "${OLD_DB}" "SELECT id, name FROM t_tag;"`, { encoding: 'utf8' });
-  const map = new Map();
+  const map = new Map<number, string>();
   for (const line of rows.trim().split('\n')) {
     if (!line) continue;
     const [id, ...nameParts] = line.split('|');
@@ -55,12 +54,12 @@ function getOldIdToName() {
 // The genre name between the corner brackets localizes with ?locale=. Works
 // for shadow tags that the genre-list page delists (レイプ, 調教, …) since the
 // search still resolves by genre id.
-const SEARCH_URL = (id, locale) =>
+const SEARCH_URL = (id: number, locale: string | null) =>
   `https://www.dlsite.com/${FLOOR}/fsr/=/genre/${String(id).padStart(3, '0')}/` + (locale ? `?locale=${locale}` : '');
 
-async function getShadowName(id, locale) {
+async function getShadowName(id: number, locale: string | null): Promise<string | null> {
   try {
-    const resp = await axios.retryGet(SEARCH_URL(id, locale), { retry: {} });
+    const resp = await axios.retryGet<string>(SEARCH_URL(id, locale), { retry: {} });
     // Prefer the <title> tag (「<name>」...); fall back to the first 「...」 in body.
     const m = resp.data.match(/「([^」]+)」/);
     return m ? m[1] : null;
@@ -69,10 +68,10 @@ async function getShadowName(id, locale) {
   }
 }
 
-async function getIdToName(locale) {
-  const resp = await axios.retryGet(GENRE_LIST(locale), { retry: {} });
+async function getIdToName(locale: string | null): Promise<Map<number, string>> {
+  const resp = await axios.retryGet<string>(GENRE_LIST(locale), { retry: {} });
   const $ = cheerio.load(resp.data);
-  const map = new Map();
+  const map = new Map<number, string>();
   $('a[href*="/genre/"]').each(function () {
     const href = $(this).attr('href') || '';
     const m = href.match(/\/genre\/(\d{3})(?:\/|$)/);
@@ -91,13 +90,13 @@ async function getIdToName(locale) {
   return map;
 }
 
-function loadExisting(file) {
+function loadExisting(file: string): Record<string, string> {
   const p = path.join(TAGS_DIR, file);
   if (!fs.existsSync(p)) return {};
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) || {}; } catch { return {}; }
+  try { return (JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, string>) || {}; } catch { return {}; }
 }
 
-function writeJson(file, obj) {
+function writeJson(file: string, obj: Record<string, string>): void {
   fs.writeFileSync(path.join(TAGS_DIR, file), JSON.stringify(obj, null, 2) + '\n');
 }
 
@@ -117,7 +116,7 @@ function writeJson(file, obj) {
   // Build canonical-key -> id. For old-DB ids use the old name (canonical).
   // For new ids (listed but not in old DB) use the current ja name (canonical
   // for future rows — no rename map entry applies).
-  const keyToId = new Map();
+  const keyToId = new Map<string, number>();
   for (const [id, oldName] of oldMap) {
     if (jaMap.has(id)) keyToId.set(oldName, id); // only if still on the list
   }
@@ -127,8 +126,8 @@ function writeJson(file, obj) {
 
   // Skip entries where the localized name equals the key (kanji overlap with
   // ja/zh — no point storing identity; falls back to the key anyway).
-  function buildMap(locMap) {
-    const out = {};
+  function buildMap(locMap: Map<number, string>): Record<string, string> {
+    const out: Record<string, string> = {};
     for (const [key, id] of keyToId) {
       const val = locMap.get(id);
       if (val && val !== key) out[key] = val;
@@ -137,7 +136,7 @@ function writeJson(file, obj) {
   }
 
   // Merge: preserve existing manual entries, add new seeded ones.
-  function merge(file, seeded) {
+  function merge(file: string, seeded: Record<string, string>): Record<string, string> {
     const existing = loadExisting(file);
     let added = 0, kept = 0;
     for (const [k, v] of Object.entries(seeded)) {
@@ -159,7 +158,7 @@ function writeJson(file, obj) {
   const shadowIds = [...oldMap.entries()].filter(([id]) => !jaMap.has(id));
   if (shadowIds.length) {
     console.log(`\nFetching ${shadowIds.length} shadow tags via per-genre search pages...`);
-    const shadowSeeded = { 'zh-CN': {}, 'en-US': {}, 'zh-TW': {} };
+    const shadowSeeded: Record<'zh-CN' | 'en-US' | 'zh-TW', Record<string, string>> = { 'zh-CN': {}, 'en-US': {}, 'zh-TW': {} };
     let got = 0;
     for (let i = 0; i < shadowIds.length; i++) {
       const [id, oldName] = shadowIds[i];
@@ -190,7 +189,7 @@ function writeJson(file, obj) {
     }
   }
   console.log('\nDone.');
-})().catch(err => {
-  console.error('Failed:', err.message);
+})().catch((err: unknown) => {
+  console.error('Failed:', (err as Error).message);
   process.exit(1);
 });

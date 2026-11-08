@@ -1,4 +1,3 @@
-// @ts-nocheck
 /*
  * Fill in t_work_file.track_title for works whose audio files are named "01.mp3",
  * "#2.wav" and the like, by extracting the track list out of the scraped
@@ -28,9 +27,9 @@
  * a per-work tool, not a batch job. Loop it from a shell if you really want to.
  *
  * Usage:
- *   node scripts/extract-track-titles.js RJ01234567 --dry-run  # inspect, then confirm
- *   node scripts/extract-track-titles.js 01234567              # same work, bare id
- *   node scripts/extract-track-titles.js d215444 --force       # overwrite existing
+ *   node scripts/extract-track-titles.ts RJ01234567 --dry-run  # inspect, then confirm
+ *   node scripts/extract-track-titles.ts 01234567              # same work, bare id
+ *   node scripts/extract-track-titles.ts d215444 --force       # overwrite existing
  */
 
 import path from 'path';
@@ -44,6 +43,11 @@ import { formatID } from '../filesystem/utils.ts';
 import { listWorkTracks } from '../filesystem/workFiles.ts';
 import { isFanzaId, canonicalizeWorkId } from '../work-id.ts';
 import { AUDIO_EXT, isLlmConfigured, isUninformative, htmlToText, structuredTitles, distinctTrackNames, buildHaystack, buildPrompt, callModel, validate } from '../track-titles.ts';
+import type { DescriptionPart } from '../types/scraper.ts';
+import type { WorkRow } from '../types/db.ts';
+
+/** The columns this CLI reads from the work row. */
+type WorkSelectRow = Pick<WorkRow, 'id' | 'title' | 'root_folder' | 'dir' | 'description' | 'description_parts'>;
 
 const USAGE = [
   'Usage: extract-track-titles <workId> [options]',
@@ -60,28 +64,42 @@ const USAGE = [
   '  --force    Overwrite titles this work already has',
 ].join('\n');
 
-const usageError = (message) => {
+const usageError = (message: string): never => {
   console.error(USAGE);
   console.error(message);
   process.exit(1);
 };
 
-let parsed;
-try {
-  parsed = parseArgs({
-    args: process.argv.slice(2),
-    allowPositionals: true,
-    strict: true,
-    options: {
-      help: { type: 'boolean' },
-      version: { type: 'boolean' },
-      'dry-run': { type: 'boolean' },
-      force: { type: 'boolean' },
-    },
-  });
-} catch (err) {
-  usageError(err.message);
+/** The CLI's flags, as parseArgs shapes them. */
+interface ParsedArgs {
+  values: { help?: boolean; version?: boolean; 'dry-run'?: boolean; force?: boolean };
+  positionals: string[];
 }
+
+// parseArgs throws on an unknown flag or a missing value; the helper keeps the
+// catch from leaving `parsed` possibly unassigned below.
+const parseCliArgs = (): ParsedArgs => {
+  try {
+    return parseArgs({
+      args: process.argv.slice(2),
+      allowPositionals: true,
+      strict: true,
+      options: {
+        help: { type: 'boolean' },
+        version: { type: 'boolean' },
+        'dry-run': { type: 'boolean' },
+        force: { type: 'boolean' },
+      },
+    // `as const` keeps `strict`/`allowPositionals` literal, which is what makes
+    // ParsedResults promise `positionals` is present.
+    } as const);
+  } catch (err) {
+    // usageError exits; returning it keeps every path of this helper typed.
+    return usageError((err as Error).message);
+  }
+};
+
+const parsed = parseCliArgs();
 
 if (parsed.values.help) {
   console.log(USAGE);
@@ -116,7 +134,7 @@ const argv = {
  * @param {String} raw
  * @returns {String|null} id as stored in t_work, or null if unparseable
  */
-const normalizeWorkId = (raw) => {
+const normalizeWorkId = (raw: string): string | null => {
   const trimmed = String(raw).trim();
   if (isFanzaId(trimmed)) return canonicalizeWorkId(trimmed.toLowerCase());
 
@@ -126,7 +144,7 @@ const normalizeWorkId = (raw) => {
 };
 
 // Without a terminal there is no one to answer, so a piped run stays a dry run.
-async function confirm(question) {
+async function confirm(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -148,7 +166,7 @@ async function run() {
   }
   if (workId !== argv.workId) console.log(`(${argv.workId} -> ${workId})`);
 
-  const work = await db.knex('t_work')
+  const work: WorkSelectRow | undefined = await db.knex('t_work')
     .select('id', 'title', 'root_folder', 'dir', 'description', 'description_parts')
     .where('id', workId)
     .first();
@@ -200,12 +218,12 @@ async function run() {
     console.log('  note: every filename already carries a title — you may not need this');
   }
 
-  const parts = work.description_parts ? JSON.parse(work.description_parts) : [];
+  const parts: DescriptionPart[] = work.description_parts ? JSON.parse(work.description_parts) : [];
   const structured = structuredTitles(parts);
   const haystack = buildHaystack(description, parts);
 
-  let accepted;
-  let rejected = [];
+  let accepted: Record<string, string>;
+  let rejected: Array<[string, string, string]> = [];
 
   if (structured.length && structured.length === trackNames.length) {
     // DLsite published the list itself and it lines up one-for-one with the
@@ -236,7 +254,7 @@ async function run() {
 
   // Keyed by relPath, which is what t_work_file rows key on. This is where one
   // title per name becomes one title per file, so every variant folder gets it.
-  const byRelPath = {};
+  const byRelPath: Record<string, string | null> = {};
   for (const t of audio) {
     if (accepted[t.title]) byRelPath[t.shortFilePath] = accepted[t.title];
   }
@@ -247,7 +265,7 @@ async function run() {
 run()
   .then(() => db.knex.destroy())
   .catch(async (err) => {
-    console.error(err.message);
+    console.error((err as Error).message);
     await db.knex.destroy();
     process.exit(1);
   });

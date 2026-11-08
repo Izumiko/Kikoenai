@@ -1,4 +1,3 @@
-// @ts-nocheck
 // One-off: build backend/scraper/tag-aliases.json by joining each old-DB genre
 // id against DLsite's CURRENT name for that genre.
 //
@@ -13,7 +12,7 @@
 // environment where the scraper's configured proxy (config.js / HTTPS_PROXY)
 // is reachable:
 //
-//   cd backend && node scripts/build-tag-aliases.js
+//   cd backend && node scripts/build-tag-aliases.ts
 //
 // It fetches ~300 pages sequentially (one per old-DB genre) with a small delay
 // to stay polite. Output: scraper/tag-aliases.json — only entries where the
@@ -31,11 +30,11 @@ import { execSync } from 'child_process';
 import axios from '../scraper/axios.ts'; // proxy-aware, with retry
 
 const OLD_DB = path.join(import.meta.dirname, '..', 'database', 'old_tag_id.sqlite3');
-const SEARCH_URL = (id) => `https://www.dlsite.com/maniax/fsr/=/genre/${String(id).padStart(3, '0')}/`;
+const SEARCH_URL = (id: number) => `https://www.dlsite.com/maniax/fsr/=/genre/${String(id).padStart(3, '0')}/`;
 
-function getOldIdToName() {
+function getOldIdToName(): Map<number, string> {
   const rows = execSync(`sqlite3 "${OLD_DB}" "SELECT id, name FROM t_tag;"`, { encoding: 'utf8' });
-  const map = new Map();
+  const map = new Map<number, string>();
   for (const line of rows.trim().split('\n')) {
     if (!line) continue;
     const [id, ...nameParts] = line.split('|');
@@ -45,14 +44,14 @@ function getOldIdToName() {
 }
 
 // Extract the current genre name from the search page title: 「<name>」の作品一覧
-function extractGenreName(html) {
+function extractGenreName(html: string): string | null {
   const m = html.match(/「([^」]+)」の作品一覧/);
   return m ? m[1] : null;
 }
 
-async function fetchCurrentName(id, retryLeft = 3) {
+async function fetchCurrentName(id: number, retryLeft = 3): Promise<string | null> {
   try {
-    const resp = await axios.retryGet(SEARCH_URL(id), { retry: {} });
+    const resp = await axios.retryGet<string>(SEARCH_URL(id), { retry: {} });
     const name = extractGenreName(resp.data);
     return name;
   } catch (err) {
@@ -68,13 +67,14 @@ async function fetchCurrentName(id, retryLeft = 3) {
   const oldMap = getOldIdToName();
   console.log(`Old DB: ${oldMap.size} genres. Fetching current names from DLsite (needs proxy)...`);
 
-  const aliases = {};
+  const aliases: Record<string, string> = {};
   let renamed = 0, same = 0, dead = 0;
   const ids = [...oldMap.keys()].sort((a, b) => a - b);
 
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
-    const oldName = oldMap.get(id);
+    // Every id came from a key of oldMap, so both lookups are present.
+    const oldName = oldMap.get(id) as string;
     const curName = await fetchCurrentName(id);
     if (curName === null) {
       dead++;
@@ -95,9 +95,11 @@ async function fetchCurrentName(id, retryLeft = 3) {
   const outPath = path.join(import.meta.dirname, '..', 'scraper', 'tag-aliases.json');
 
   // Keep hand-added entries this run did not regenerate (see header).
-  let existing = {};
+  let existing: Record<string, string> = {};
   try {
-    for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(outPath, 'utf8')))) {
+    // The file holds one JSON string per key, plus the `_comment` marker.
+    const stored = JSON.parse(fs.readFileSync(outPath, 'utf8')) as Record<string, string>;
+    for (const [k, v] of Object.entries(stored)) {
       if (!k.startsWith('_')) existing[k] = v;
     }
   } catch { /* no file yet — first run */ }
@@ -110,7 +112,7 @@ async function fetchCurrentName(id, retryLeft = 3) {
   };
   fs.writeFileSync(outPath, JSON.stringify(out, null, 2) + '\n');
   console.log(`\nWrote ${renamed} aliases (+${kept.length} kept) to ${outPath}`);
-})().catch(err => {
-  console.error('Failed:', err.message);
+})().catch((err: unknown) => {
+  console.error('Failed:', (err as Error).message);
   process.exit(1);
 });

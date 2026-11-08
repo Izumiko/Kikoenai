@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Backfill script (Phase 1 + Phase 2):
  *
@@ -23,8 +22,8 @@
  *     completed = seconds >= 0.95 * duration. Reads no files.
  *
  * Usage:
- *   node ./scripts/backfill-progress.js          # real run
- *   node ./scripts/backfill-progress.js --dry-run # preview only
+ *   node ./scripts/backfill-progress.ts          # real run
+ *   node ./scripts/backfill-progress.ts --dry-run # preview only
  *
  * Also exported as runBackfill({ dryRun }).
  */
@@ -33,6 +32,26 @@ import path from 'path';
 import db from '../database/db.ts';
 import { config } from '../config.ts';
 import { listWorkTracks } from '../filesystem/workFiles.ts';
+import type { WorkFilesDb } from '../filesystem/workFiles.ts';
+import type { HistoryRow, TrackProgressRow, WorkRow } from '../types/db.ts';
+
+/** The slice of the database the backfill reads and writes. */
+type BackfillDb = WorkFilesDb & Pick<typeof db, 'updateUserReview' | 'upsertTrackProgress'>;
+
+interface BackfillOptions {
+  dryRun?: boolean;
+  log?: (message: string) => void;
+  dbApi?: BackfillDb;
+}
+
+/** The columns the backfill reads from one history row. */
+type HistorySelectRow = Pick<HistoryRow, 'user_name' | 'work_id' | 'state'>;
+
+/** The columns the backfill reads from one work row. */
+type WorkSelectRow = Pick<WorkRow, 'id' | 'root_folder' | 'dir'>;
+
+/** The columns the backfill reads from one per-track progress row. */
+type ProgressSelectRow = Pick<TrackProgressRow, 'user_name' | 'work_id' | 'track_key' | 'seconds' | 'completed'>;
 
 /**
  * Run the backfill. Collects log lines instead of writing to stdout so the
@@ -41,14 +60,14 @@ import { listWorkTracks } from '../filesystem/workFiles.ts';
  * dbApi defaults to the live database module; tests pass { knex, ...makeQueries(knex) }
  * over an in-memory database.
  */
-async function runBackfill({ dryRun = false, log = (m) => console.log(m), dbApi = db } = {}) {
+async function runBackfill ({ dryRun = false, log = (m) => console.log(m), dbApi = db }: BackfillOptions = {}) {
   log(`[backfill-progress] Starting backfill${dryRun ? ' (DRY RUN)' : ''}`);
   log('');
 
-  const historyRows = await dbApi.knex('t_play_history').select('user_name', 'work_id', 'state');
+  const historyRows: HistorySelectRow[] = await dbApi.knex('t_play_history').select('user_name', 'work_id', 'state');
 
-  const workRows = await dbApi.knex('t_work').select('id', 'root_folder', 'dir');
-  const workDirMap = new Map();
+  const workRows: WorkSelectRow[] = await dbApi.knex('t_work').select('id', 'root_folder', 'dir');
+  const workDirMap = new Map<string, string>();
   for (const w of workRows) {
     const rootFolder = config.rootFolders.find(rf => rf.name === w.root_folder);
     if (rootFolder) {
@@ -62,10 +81,10 @@ async function runBackfill({ dryRun = false, log = (m) => console.log(m), dbApi 
   // track-progress split. existingProgress answers "is this work seeded":
   // once a work is seeded the live player keeps its progress current, so
   // redoing it on every backfill run is pure waste. Skip those here.
-  const progressRows = await dbApi.knex('t_track_progress')
+  const progressRows: ProgressSelectRow[] = await dbApi.knex('t_track_progress')
     .select('user_name', 'work_id', 'track_key', 'seconds', 'completed');
-  const byTrack = new Map();
-  const existingProgress = new Set();
+  const byTrack = new Map<string, ProgressSelectRow>();
+  const existingProgress = new Set<string>();
   for (const r of progressRows) {
     byTrack.set(`${r.user_name}\u0000${r.work_id}\u0000${r.track_key}`, r);
     existingProgress.add(`${r.user_name}\u0000${r.work_id}`);
@@ -109,7 +128,7 @@ async function runBackfill({ dryRun = false, log = (m) => console.log(m), dbApi 
     const trackProgress = parkedRelPath
       ? byTrack.get(`${username}\u0000${workId}\u0000${parkedRelPath}`)
       : undefined;
-    let seconds = null;
+    let seconds: number | null = null;
     if (typeof parsed.seconds === 'number') {
       seconds = parsed.seconds;
     } else if (trackProgress && typeof trackProgress.seconds === 'number') {
@@ -146,7 +165,7 @@ async function runBackfill({ dryRun = false, log = (m) => console.log(m), dbApi 
                 await dbApi.updateUserReview(username, workId, null, '', 'listened', false, true, false);
                 log(`  [P1-OK]  ${username} / work ${workId} — marked as listened`);
               } catch (err) {
-                log(`  [P1-ERR] ${username} / work ${workId} — ${err.message}`);
+                log(`  [P1-ERR] ${username} / work ${workId} — ${(err as Error).message}`);
               }
             }
             summary.marked++;
@@ -195,7 +214,7 @@ async function runBackfill({ dryRun = false, log = (m) => console.log(m), dbApi 
         await dbApi.upsertTrackProgress(username, workId, parkedRelPath, seconds, completed);
         log(`  [P2-OK]  ${username} / work ${workId} — seeded track_progress (${completed ? 'completed' : 'partial'}, ${Math.round(seconds)}s)`);
       } catch (err) {
-        log(`  [P2-ERR] ${username} / work ${workId} — upsert failed: ${err.message}`);
+        log(`  [P2-ERR] ${username} / work ${workId} — upsert failed: ${(err as Error).message}`);
       }
     }
     summary.p2Seeded++;
@@ -233,7 +252,7 @@ export { runBackfill };
  * the index is the source of truth, and reimplementing it risks drift.
  * Returns the relPath, or null.
  */
-async function resolveRelPath(workId, trackId, workDir, dbApi) {
+async function resolveRelPath (workId: string, trackId: string, workDir: string | undefined, dbApi: BackfillDb): Promise<string | null> {
   if (!trackId) return null;
   const slash = trackId.indexOf('/');
   if (slash === -1) return null;
@@ -252,7 +271,7 @@ async function resolveRelPath(workId, trackId, workDir, dbApi) {
   return tracks[index].shortFilePath;
 }
 
-// CLI entry: node ./scripts/backfill-progress.js [--dry-run]
+// CLI entry: node ./scripts/backfill-progress.ts [--dry-run]
 if (import.meta.main) {
   const dryRun = process.argv.includes('--dry-run');
   runBackfill({ dryRun, log: (m) => console.log(m) })

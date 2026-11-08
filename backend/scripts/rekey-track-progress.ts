@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Recover per-track positions that migration 20260912000000 could not rekey.
  *
@@ -13,7 +12,7 @@
  * removed from the request path, and it must not happen unasked on a boot.
  * CRC32 lives here and nowhere else for the same reason.
  *
- *   node ./scripts/rekey-track-progress.js [--dry-run] [--purge]
+ *   node ./scripts/rekey-track-progress.ts [--dry-run] [--purge]
  *
  *   --dry-run  report what would change, write nothing
  *   --purge    discard the leftover rows instead of recovering them
@@ -29,12 +28,14 @@ import path from 'path';
 import db from '../database/db.ts';
 import { config } from '../config.ts';
 import { listWorkTracks } from '../filesystem/workFiles.ts';
+import type { WorkFilesDb } from '../filesystem/workFiles.ts';
+import type { TrackProgressRow, WorkRow } from '../types/db.ts';
 
 // A key the migration left behind: 8 lowercase hex digits. A relPath cannot look
 // like one, because a tracked file always carries an extension.
 const HASH_KEY = /^[0-9a-f]{8}$/;
 
-const crc32 = (filePath) => new Promise((resolve, reject) => {
+const crc32 = (filePath: string): Promise<string> => new Promise((resolve, reject) => {
   let crc = 0;
   const stream = fs.createReadStream(filePath);
   stream.on('data', (chunk) => { crc = zlib.crc32(chunk, crc); });
@@ -43,11 +44,27 @@ const crc32 = (filePath) => new Promise((resolve, reject) => {
 });
 
 /**
- * dbApi defaults to the live database module; tests pass { knex } like
- * backfill-progress.js does.
+ * The slice of the database this tool reads and rewrites. It is the listing's
+ * own slice, because it is handed straight to listWorkTracks.
  */
-async function run({ dryRun = false, purge = false, log = console.log, dbApi = db } = {}) {
-  const rows = await dbApi.knex('t_track_progress').select('user_name', 'work_id', 'track_key', 'seconds');
+type RekeyDb = WorkFilesDb;
+
+interface RekeyOptions {
+  dryRun?: boolean;
+  purge?: boolean;
+  log?: (message: string) => void;
+  dbApi?: RekeyDb;
+}
+
+/** A `t_track_progress` row still keyed by its old CRC32 hash. */
+type HashKeyedRow = Pick<TrackProgressRow, 'user_name' | 'work_id' | 'track_key' | 'seconds'>;
+
+/**
+ * dbApi defaults to the live database module; tests pass { knex } like
+ * backfill-progress.ts does.
+ */
+async function run ({ dryRun = false, purge = false, log = console.log, dbApi = db }: RekeyOptions = {}) {
+  const rows: HashKeyedRow[] = await dbApi.knex('t_track_progress').select('user_name', 'work_id', 'track_key', 'seconds');
   const stale = rows.filter((row) => HASH_KEY.test(row.track_key));
   if (!stale.length) {
     log('Nothing to do: every track_key is already a relative path.');
@@ -67,18 +84,22 @@ async function run({ dryRun = false, purge = false, log = console.log, dbApi = d
     return { stale: stale.length, recovered: 0, purged: stale.length, unresolved: 0 };
   }
 
-  const byWorkId = new Map();
+  const byWorkId = new Map<string, HashKeyedRow[]>();
   for (const row of stale) {
     if (!byWorkId.has(row.work_id)) byWorkId.set(row.work_id, []);
-    byWorkId.get(row.work_id).push(row);
+    // The `has` check above guarantees the entry.
+    byWorkId.get(row.work_id)!.push(row);
   }
 
   let recovered = 0;
   let unresolved = 0;
   for (const [workId, workRows] of byWorkId) {
-    const work = await dbApi.knex('t_work').select('root_folder', 'dir').where('id', workId).first();
+    const work: Pick<WorkRow, 'root_folder' | 'dir'> | undefined =
+      await dbApi.knex('t_work').select('root_folder', 'dir').where('id', workId).first();
     const rootFolder = work && config.rootFolders.find((f) => f.name === work.root_folder);
-    if (!rootFolder) {
+    // A work row that is gone and a root folder that is not configured are
+    // the same dead end for these rows: neither can list the files.
+    if (!work || !rootFolder) {
       log(`  work ${workId}: root folder missing, skipping ${workRows.length} rows`);
       unresolved += workRows.length;
       continue;
@@ -89,14 +110,14 @@ async function run({ dryRun = false, purge = false, log = console.log, dbApi = d
     try {
       tracks = await listWorkTracks(workId, workDir, { dbApi });
     } catch (err) {
-      log(`  work ${workId}: cannot list files (${err.message}), skipping ${workRows.length} rows`);
+      log(`  work ${workId}: cannot list files (${(err as Error).message}), skipping ${workRows.length} rows`);
       unresolved += workRows.length;
       continue;
     }
 
     // Hash only the audio files this work actually needs matched.
     const wanted = new Set(workRows.map((r) => r.track_key));
-    const byHash = new Map();
+    const byHash = new Map<string, string>();
     for (const track of tracks) {
       if (byHash.size === wanted.size) break;
       const fullPath = path.join(workDir, track.subtitle || '', track.title);

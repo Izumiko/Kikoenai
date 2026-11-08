@@ -1,10 +1,9 @@
-// @ts-nocheck
 /**
  * Manual test for the Fanza scraper.
  *
  * Usage:
- *   node scripts/test-fanza-scraper.js d215444 [dXXXXXX ...]
- *   node scripts/test-fanza-scraper.js --dump d215444
+ *   node scripts/test-fanza-scraper.ts d215444 [dXXXXXX ...]
+ *   node scripts/test-fanza-scraper.ts --dump d215444
  *
  * Prints every field scraped from the Fanza doujin detail page.
  * Proxy settings from config/config.json (httpProxyHost/httpProxyPort) apply.
@@ -20,6 +19,7 @@ process.env.FREEZE_CONFIG_FILE = '1';
 import path from 'path';
 import fs from 'fs';
 import * as cheerio from 'cheerio';
+import type { ScrapedWorkMetadata } from '../types/scraper.ts';
 
 const args = process.argv.slice(2);
 
@@ -30,7 +30,8 @@ const args = process.argv.slice(2);
 if (args.includes('--no-proxy')) {
   const { config } = await import('../config.ts');
   config.httpProxyHost = '';
-  config.httpProxyPort = null;
+  // 0 is config.ts's own "no proxy" value; only truthiness is ever read.
+  config.httpProxyPort = 0;
 }
 
 const { scrapeWorkMetadataFromFanza } = await import('../scraper/fanza.ts');
@@ -45,7 +46,7 @@ if (ids.length === 0) {
   process.exit(1);
 }
 
-const printWork = (work) => {
+const printWork = (work: ScrapedWorkMetadata) => {
   console.log('─'.repeat(60));
   console.log(`id:                ${work.id}`);
   console.log(`title:             ${work.title}`);
@@ -71,9 +72,9 @@ const printWork = (work) => {
   console.log();
 };
 
-const dumpPage = async (id) => {
+const dumpPage = async (id: string) => {
   const url = `https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=${fanzaCid(id)}/`;
-  const response = await axios.retryGet(url, {
+  const response = await axios.retryGet<string>(url, {
     retry: {},
     headers: { cookie: 'age_check_done=1; dc_doujin_age_check_done=1' },
   });
@@ -115,7 +116,7 @@ const dumpPage = async (id) => {
       printWork(work);
     } catch (err) {
       failed += 1;
-      console.error(`FAILED ${id}: ${err.message}`);
+      console.error(`FAILED ${id}: ${(err as Error).message}`);
     }
   }
   process.exit(failed > 0 ? 1 : 0);
