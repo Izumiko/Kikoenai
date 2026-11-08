@@ -96,15 +96,29 @@ module.exports = function (ctx) {
       scssLoaderOptions: { implementation: 'sass' },
       sassLoaderOptions: { implementation: 'sass' },
 
-      // The frontend imports two backend modules that are TypeScript now
+      // The frontend imports a backend module that is TypeScript now
       // (src/utils.js and FilterTerms.vue -> backend/database/search-query).
-      // Quasar only resolves `.ts` for a TypeScript project (it looks for a
-      // frontend/tsconfig.json), and these are plain JS-compatible modules, so
-      // all webpack needs is the extension.
+      // Quasar only adds the `.ts` extension and a TypeScript loader for a
+      // TypeScript project (it looks for a frontend/tsconfig.json), so this
+      // both resolves the extension and strips the types from those files with
+      // Babel. The rule is scoped to ../backend: the frontend's own sources are
+      // still plain JS and keep Quasar's normal loader chain.
       extendWebpack (cfg) {
         if (!cfg.resolve.extensions.includes('.ts')) {
           cfg.resolve.extensions.push('.ts')
         }
+        cfg.module.rules.push({
+          test: /\.ts$/,
+          // A path test rather than path.resolve(): Quasar compiles this config
+          // to ESM, where a bare require('path') is not available.
+          include: /[\\/]backend[\\/]/,
+          use: [{
+            loader: 'babel-loader',
+            options: {
+              presets: ['@babel/preset-typescript']
+            }
+          }]
+        })
       }
     },
 
