@@ -122,7 +122,9 @@ describe('scan progress reporting', function () {
 
     after(function () {
       if (filePath) fs.rmSync(filePath, { force: true });
-      fs.rmdirSync(scanLog.LOG_FOLDER_DIR, { recursive: false });
+      // Node 26 rejects an explicit `recursive: false`; plain rmdirSync still
+      // refuses a non-empty directory, which is the behaviour this relies on.
+      fs.rmdirSync(scanLog.LOG_FOLDER_DIR);
     });
 
     it('writes every line it is given, with level and work id', function () {

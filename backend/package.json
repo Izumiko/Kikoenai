@@ -11,7 +11,7 @@
     "kikoeru"
   ],
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "scripts": {
     "start": "cross-env NODE_ENV=production node --trace-warnings app.js",
@@ -20,6 +20,7 @@
     "backfill:progress": "node --trace-warnings ./scripts/backfill-progress.js",
     "import:legacy-history": "node --trace-warnings ./scripts/import-legacy-history.js",
     "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "npm run lint && cross-env NODE_ENV=test mocha test/ --ignore test/benchmark.js",
     "bench": "cross-env NODE_ENV=test mocha test/benchmark.js"
   },
@@ -87,6 +88,8 @@
     "eslint-plugin-n": "^18.5.0",
     "mocha": "^12.0.3",
     "nodemon": "^3.1.14",
-    "serve-index": "^1.9.1"
+    "serve-index": "^1.9.1",
+    "@types/node": "^26.6.6",
+    "typescript": "^6.0.3"
   }
 }
