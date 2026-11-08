@@ -1,0 +1,54 @@
+// @ts-nocheck
+
+import { validationResult } from 'express-validator';
+import { canonicalizeWorkId } from '../../work-id.ts';
+
+const isValidRequest = (req, res, sendMessage = true) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    if (sendMessage) {
+      res.status(400).json({ errors: errors.array() });
+    }
+    return false;
+  } else {
+    return true;
+  }
+};
+
+/**
+ * Pre-migration databases stored DLsite ids as bare integers, so 7-digit ids
+ * (which since migration 20260802000000 are stored zero-padded to 8 digits)
+ * may still arrive from stale client caches (PWA service worker, localStorage)
+ * or old bookmarks. A 7-digit string is never a canonical work id — formatID
+ * pads to either 6 or 8 digits — so padding it here is always safe and lets
+ * legacy ids self-heal on every route using these validators.
+ */
+const padLegacyId = (id) => String(id).replace(/^(bj)?(\d{7})$/i, (m, prefix, digits) => `${prefix || ''}0${digits}`);
+
+/**
+ * Sanitizer for every work-id route parameter: pads a legacy 7-digit DLsite id
+ * and folds Fanza's underscore spelling onto the canonical one, so a URL held
+ * by an old bookmark or a stale PWA cache (`/work/d_215444`) keeps resolving
+ * after migration 20260828000000. See work-id.js.
+ */
+const normalizeWorkId = (id) => canonicalizeWorkId(padLegacyId(id));
+
+/**
+ * Work-id shape: a DLsite doujin id is
+ * \d{6,8} (zero-padded 6 or 8 digits), a DLsite books id keeps its BJ prefix,
+ * a Fanza id is d\d+ — the legacy d_\d+ spelling is accepted and sanitized to
+ * the canonical form.
+ */
+const WORK_ID_RE = /^(bj\d{6,8}|\d{6,8}|d_?\d+)$/i;
+
+/**
+ * Returns an express-validator chain for a work id param (route param).
+ */
+import expressValidator from 'express-validator';
+const workIdParam = () => expressValidator.param('id').isString().matches(WORK_ID_RE).customSanitizer(normalizeWorkId);
+
+// WORK_ID_RE and normalizeWorkId are exported for callers with no
+// express-validator chain to hang them off -- the Socket.IO handlers, which
+// take a work id straight from the client. The id shape is a contract
+// (backend/AGENTS.md §6); a second copy of this regex would drift.
+export { isValidRequest, workIdParam, WORK_ID_RE, normalizeWorkId };

@@ -1,5 +1,6 @@
 {
   "name": "kikoeru-express",
+  "type": "module",
   "version": "1.0.2",
   "description": "A self-hosted media server for listening to your DLsite voice works.",
   "homepage": "https://github.com/kikoeru-project/kikoeru-express",
@@ -14,24 +15,17 @@
     "node": ">=26.0.0"
   },
   "scripts": {
-    "start": "cross-env NODE_ENV=production node --trace-warnings app.js",
-    "dev": "nodemon --trace-warnings app.js",
-    "scan": "node --trace-warnings ./filesystem/scanner.js",
-    "backfill:progress": "node --trace-warnings ./scripts/backfill-progress.js",
-    "import:legacy-history": "node --trace-warnings ./scripts/import-legacy-history.js",
+    "start": "cross-env NODE_ENV=production node --trace-warnings app.ts",
+    "dev": "node --watch --watch-path=auth --watch-path=database --watch-path=filesystem --watch-path=routes --watch-path=scraper --watch-path=scripts --watch-path=test --watch-path=app.ts --watch-path=api.ts --watch-path=asr.ts --watch-path=base-path.ts --watch-path=common.ts --watch-path=config.ts --watch-path=socket.ts --watch-path=suggest-track-titles.ts --watch-path=track-titles.ts --watch-path=transcribe-work.ts --watch-path=upgrade.ts --watch-path=work-id.ts --trace-warnings app.ts",
+    "scan": "node --trace-warnings ./filesystem/scanner.ts",
+    "backfill:progress": "node --trace-warnings ./scripts/backfill-progress.ts",
+    "import:legacy-history": "node --trace-warnings ./scripts/import-legacy-history.ts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "npm run lint && cross-env NODE_ENV=test mocha test/ --ignore test/benchmark.js",
-    "bench": "cross-env NODE_ENV=test mocha test/benchmark.js"
+    "test": "npm run lint && npm run typecheck && cross-env NODE_ENV=test mocha --extension ts 'test/**/*.ts' --ignore test/benchmark.ts --ignore 'test/{helpers,spinup,teardown}/**'",
+    "bench": "cross-env NODE_ENV=test mocha --extension ts test/benchmark.ts"
   },
-  "nodemonConfig": {
-    "ignore": [
-      "config/*",
-      "sqlite/*"
-    ],
-    "delay": "2500"
-  },
-  "bin": "app.js",
+  "bin": "app.ts",
   "pkg": {
     "scripts": [
       "filesystem/scanner.js",
@@ -86,8 +80,8 @@
     "eslint": "^10.14.0",
     "eslint-plugin-n": "^18.5.0",
     "mocha": "^12.0.3",
-    "nodemon": "^3.1.14",
     "serve-index": "^1.9.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1"
   }
 }

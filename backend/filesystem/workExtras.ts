@@ -1,0 +1,193 @@
+// @ts-nocheck
+// Sample/description image download and DLsite review scraping.
+
+import fs from 'fs';
+import LimitPromise from 'limit-promise';
+
+import axios from '../scraper/axios.ts';
+import db from '../database/db.ts';
+import { config } from '../config.ts';
+import { scrapeWorkReviewsFromDLsite } from '../scraper/dlsite.ts';
+import { formatID, workImageFileName, saveWorkImageToDisk, collectWorkImages, deleteWorkImagesFromDisk } from './utils.ts';
+import { isFanzaId, workno } from '../work-id.ts';
+
+const displayIdOf = id => (isFanzaId(id) ? id : formatID(id));
+
+// separate limit for single work refresh
+const REFRESH_IMAGE_CONCURRENCY = 4;
+
+const IMAGE_KIND_LABEL = { smp: '预览图', part: '说明图' };
+
+const consoleLogger = {
+  info: (id, message) => console.log(`[${workno(id)}] ${message}`),
+  warn: (id, message) => console.warn(`[${workno(id)}] ${message}`),
+};
+
+/**
+ * Whether the implicit image download and review scrape are switched off.
+ * A missing key counts as "skip", so a config.json predating the setting gets
+ * the cheaper behaviour rather than silently keeping the expensive one.
+ * @returns {Boolean}
+ */
+const skipWorkExtras = () => config.skipWorkExtras !== false;
+
+/**
+ * Split a run's targets into the ones already on disk and the ones to fetch.
+ *
+ * An image is reused only when the *previous* list said this same url lives in
+ * this same file, and that file is still there. The url match is what makes it
+ * safe: names are positional, so `_img_part2` holds a different picture as soon
+ * as the description gains or loses one, and "the file exists" alone would keep
+ * the wrong bytes forever.
+ * @param {Array<Object>} targets Images this run intends to write, with `file` set.
+ * @param {Array<Object>} previous Stored sample_images from the last run.
+ * @param {Set<String>} onDisk File names currently in the image folder.
+ * @returns {{reuse: Array<Object>, fetch: Array<Object>}}
+ */
+function splitDownloadTargets(targets, previous, onDisk) {
+  const fileByUrl = {};
+  for (const image of (previous || [])) {
+    if (image && image.url && image.file) fileByUrl[image.url] = image.file;
+  }
+
+  const reuse = [];
+  const fetch = [];
+  for (const target of targets) {
+    if (fileByUrl[target.url] === target.file && onDisk.has(target.file)) reuse.push(target);
+    else fetch.push(target);
+  }
+  return { reuse, fetch };
+}
+
+/**
+ * Downloads a work's sample and description images into the image folder and
+ * records what landed on disk.
+ *
+ * Failures are not fatal: DLsite drops assets for old works, and a missing
+ * sample image is worth far less than the metadata already stored. Each entry
+ * keeps its remote url either way, so a later run can retry.
+ * @param {String} id Work id.
+ * @param {Object} metadata Scraped work metadata (sampleImages, descriptionParts).
+ * @param {Object} [log] Logger with info(id, message) / warn(id, message).
+ * @param {Object} [options]
+ * @param {Array<Object>} [options.previous] Stored sample_images, so an image
+ *   already on disk under the same name is not fetched again.
+ * @param {Number} [options.concurrency=1] Images to fetch at once.
+ * @returns {Promise<Array<Object>>} The image list, each entry with `file` set or null.
+ */
+async function downloadWorkImages(id, metadata, log = consoleLogger, options = {}) {
+  const { previous = [], concurrency = 1 } = options;
+  const displayId = displayIdOf(id);
+  const images = collectWorkImages(metadata);
+  if (!images.length) return [];
+
+  // performScan creates the image folder, but /api/refresh/:id can be the
+  // first thing to write there after an upgrade — an existing library never
+  // rescanned still has no images/ directory.
+  await fs.promises.mkdir(config.imageFolderDir, { recursive: true });
+
+  const counters = {};
+  const targets = images.map((image) => {
+    counters[image.kind] = (counters[image.kind] || 0) + 1;
+    const ext = (image.url.split('?')[0].split('.').pop() || 'jpg');
+    return { ...image, file: workImageFileName(id, image.kind, counters[image.kind], ext) };
+  });
+
+  // Images are ~1MB each and arrive one at a time, so refetching a work's whole
+  // set is the bulk of what a refresh costs. Anything already on disk under the
+  // name this run would give it is the same picture, and is kept.
+  const onDisk = new Set(await fs.promises.readdir(config.imageFolderDir).catch(() => []));
+  const { reuse, fetch } = splitDownloadTargets(targets, previous, onDisk);
+
+  if (!fetch.length) {
+    log.info(displayId, `作品图片已是最新 (${reuse.length} 张), 无需下载.`);
+  } else {
+    log.info(displayId, `从 DLsite 下载作品图片 (${fetch.length} 张`
+      + `${reuse.length ? `, 跳过已有 ${reuse.length} 张` : ''})...`);
+  }
+
+  const limit = new LimitPromise(Math.max(1, concurrency));
+
+  let finished = 0;
+  const fetchOne = async (target) => {
+    const label = IMAGE_KIND_LABEL[target.kind] || target.kind;
+    try {
+      const imageRes = await axios.retryGet(target.url, { responseType: 'stream', retry: {} });
+      await saveWorkImageToDisk(imageRes.data, target.file);
+      log.info(displayId, `${label} ${++finished}/${fetch.length} 下载完成: ${target.file}`);
+      return target;
+    } catch (err) {
+      log.warn(displayId, `${label} ${++finished}/${fetch.length} 下载失败: ${target.file} - ${err.message} (URL: ${target.url})`);
+      return { ...target, file: null };
+    }
+  };
+
+  const results = [...reuse, ...await Promise.all(fetch.map(target => limit.call(fetchOne, target)))];
+
+  if (fetch.length) {
+    const stored = kind => results.filter(image => image.file && image.kind === kind).length;
+    const wanted = kind => targets.filter(target => target.kind === kind).length;
+    log.info(displayId, `Work image downloaded: sample ${stored('smp')}/${wanted('smp')}, `
+      + `part ${stored('part')}/${wanted('part')}.`);
+  }
+
+  // Page order, not fetch order: the stored list doubles as the render order.
+  const byUrl = new Map(results.map(result => [result.url, result]));
+  const ordered = targets.map(target => byUrl.get(target.url) || { ...target, file: null });
+
+  const pruned = await deleteWorkImagesFromDisk(id, new Set(targets.map(target => target.file)));
+  if (pruned) log.info(displayId, `清理无用的作品图片 ${pruned} 张.`);
+
+  return ordered;
+}
+
+/**
+ * Downloads a work's images and stores the resulting list, swallowing errors
+ * the same way the cover download does.
+ * @param {String} id Work id.
+ * @param {Object} metadata Scraped work metadata.
+ * @param {Object} [log] Logger with info(id, message) / warn(id, message).
+ * @param {Object} [options] Passed to downloadWorkImages (concurrency).
+ * @returns {Promise<Number>} Number of images that reached disk.
+ */
+async function saveWorkImages(id, metadata, log = consoleLogger, options = {}) {
+  const displayId = displayIdOf(id);
+  try {
+    const stored = await db.getWorkExtras(id);
+    const images = await downloadWorkImages(id, metadata, log, {
+      ...options,
+      previous: stored ? stored.sampleImages : [],
+    });
+    if (!images.length) return 0;
+    await db.setWorkSampleImages(id, images);
+    return images.filter(image => image.file).length;
+  } catch (err) {
+    log.warn(displayId, `在保存作品图片过程中出错: ${err.message}`);
+    return 0;
+  }
+}
+
+/**
+ * Scrapes every DLsite user review of a work and replaces the stored set.
+ *
+ * @param {String} id Work id.
+ * @param {Object} [log] Logger with info(id, message) / warn(id, message).
+ * @returns {Promise<Number>} Number of reviews stored.
+ */
+async function saveWorkReviews(id, log = consoleLogger) {
+  if (isFanzaId(id)) return 0; // Fanza reviews are not scraped
+
+  const rjcode = formatID(id);
+  try {
+    log.info(rjcode, '开始抓取 DLsite 用户评论...');
+    const reviews = await scrapeWorkReviewsFromDLsite(id);
+    await db.replaceWorkDlsiteReviews(id, reviews);
+    log.info(rjcode, `抓取到 ${reviews.length} 条 DLsite 用户评论.`);
+    return reviews.length;
+  } catch (err) {
+    log.warn(rjcode, `在抓取 DLsite 用户评论过程中出错: ${err.message}`);
+    return 0;
+  }
+}
+
+export { skipWorkExtras, splitDownloadTargets, REFRESH_IMAGE_CONCURRENCY, downloadWorkImages, saveWorkImages, saveWorkReviews };

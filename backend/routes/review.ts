@@ -1,0 +1,116 @@
+// @ts-nocheck
+
+import express from 'express';
+const router = express.Router();
+import { query, body } from 'express-validator';
+import { config } from '../config.ts';
+import db from '../database/db.ts';
+import normalize from './utils/normalize.ts';
+import { isValidRequest, workIdParam } from './utils/validate.ts';
+
+const PAGE_SIZE = config.pageSize || 12;
+
+
+router.get('/',
+  query('page').optional().isInt(),
+  query('sort').optional().isIn(['desc', 'asc']),
+  query('seed').optional().isInt(),
+  query('filter').optional().isIn(['marked', 'listening', 'listened', 'replay', 'postponed']),
+   
+  async (req, res, next) => {
+    if(!isValidRequest(req, res)) return;
+
+    const currentPage = parseInt(req.query.page) || 1;
+    // 通过 "音声id, 贩卖日, 评价, 用户评价, 售出数, 评论数量, 价格, 平均评价, 全年龄新作" 排序
+    // ['id', 'release', 'rating', 'dl_count', 'review_count', 'price', 'rate_average_2dp, nsfw']
+    const order = req.query.order || 'release';
+    const sort = req.query.sort || 'desc';
+    const offset = (currentPage - 1) * PAGE_SIZE;
+    const username = config.auth ? req.user.name : 'admin';
+    const filter = req.query.filter;
+    
+    try {
+      const {works, totalCount} = await db.getWorksWithReviews({username: username, limit: PAGE_SIZE, offset: offset, orderBy: order, sortOption: sort, filter});
+
+      normalize(works, {dateOnly: true});
+
+      res.send({
+        works,
+        pagination: {
+          currentPage,
+          pageSize: PAGE_SIZE,
+          totalCount: totalCount[0]['count']
+        }
+      });
+    } catch(err) {
+      res.status(500).send({error: '查询过程中出错'});
+      console.error(err);
+    }
+});
+
+// 提交用户评价
+router.put('/:id',
+  workIdParam(),
+  body('rating').optional().isInt(),
+  body('progress').optional().isIn(['marked', 'listening', 'listened', 'replay', 'postponed']),
+  body('starOnly').optional().isBoolean(),
+  body('progressOnly').optional().isBoolean(),
+  query('autoMark').optional().isBoolean(),
+   
+  (req, res, next) => {
+    if(!isValidRequest(req, res)) return;
+
+    let username = config.auth ? req.user.name : 'admin';
+    let starOnly = true;
+    let progressOnly = false;
+    let autoMark = false;
+    if (req.query.starOnly === 'false') {
+      starOnly = false;
+    }
+    if (req.query.progressOnly === 'true') {
+      progressOnly = true;
+    }
+    if (req.query.autoMark === 'true') {
+      autoMark = true;
+    }
+    
+    db.updateUserReview(username, req.params.id, req.body.rating, req.body.review_text, req.body.progress, starOnly, progressOnly, autoMark)
+        .then(() => {
+          if (progressOnly) {
+            res.send({ message: '更新进度成功' });
+          } else {
+            res.send({ message: '评价成功' });
+          }
+        }).catch((err) =>{
+          res.status(500).send({ error: '评价失败，服务器错误' });
+          console.error(err);
+        });
+});
+
+// 删除用户标记
+router.delete('/:id',
+  workIdParam(),
+  (req, res, next) => {
+    if(!isValidRequest(req, res)) return;
+
+    let username = config.auth ? req.user.name : 'admin';
+    db.deleteUserReview(username, req.params.id)
+      .then(() => {
+        res.send({message: '删除标记成功'});
+      }).catch((err) => next(err));
+});
+
+// 只清除进度，保留评分与评论
+router.delete('/:id/progress',
+  workIdParam(),
+  (req, res, next) => {
+    if(!isValidRequest(req, res)) return;
+
+    let username = config.auth ? req.user.name : 'admin';
+    db.resetUserProgress(username, req.params.id)
+      .then(() => {
+        res.send({message: '清除进度成功'});
+      }).catch((err) => next(err));
+});
+
+export default router;

@@ -1,0 +1,67 @@
+// @ts-nocheck
+
+import * as cheerio from 'cheerio'; // 解析器
+
+import axios from './axios.ts'; // 数据请求
+import { nameToUUID } from './utils.ts';
+import { formatID } from '../filesystem/utils.ts';
+import { isBooksId } from '../work-id.ts';
+
+let asmrOneApiUrl = '';
+
+async function updateAsmrOneApiUrl() {
+  const url = `https://asmr.one/index.html`;
+  try {
+    const response = await axios.retryGet(url, {
+      retry: {},
+      headers: { "cookie": 'locale=ja_JP' },
+    });
+
+    const $ = cheerio.load(response.data);
+
+    asmrOneApiUrl = $('link[rel="preconnect"][as="fetch"]').attr('href');
+
+    console.log('asmr one api url = ', asmrOneApiUrl);
+  } catch {
+    console.warn("获取ASMROne api url失败");
+  }
+}
+
+async function scrapeWorkMetadataFromAsmrOne(id) {
+  // ASMR.one indexes the doujin floor only, and its API takes bare digits — a
+  // books id would either 404 or, worse, resolve to the RJ work of the same
+  // number and store a different work's metadata under this id.
+  if (isBooksId(id)) throw new Error('ASMR.one does not index DLsite books works.');
+
+  if (asmrOneApiUrl === '') await updateAsmrOneApiUrl();
+
+  const rjcode = formatID(id);
+  const url = `https://api.asmr-200.com/api/workInfo/${rjcode}`;
+  const response = await axios.retryGet(url, {
+    retry: {},
+    headers: { "cookie": 'locale=ja_JP' },
+  });
+  // console.log(`RJ${rjcode} asmr one data = `, response.data);
+  // const data = JSON.parse(response.data);
+  const data = response.data;
+
+  // va的UUID可能和asmrOne不同，这里做一次强制转换
+  data.vas.forEach((va) => {
+    va.id = nameToUUID(va.name);
+  });
+
+  // ASMR.one returns id as a bare number (e.g. 1100616) with the leading zero
+  // stripped, but every other part of the app addresses works by the padded
+  // DLsite id ("01100616"). Normalize so the row is stored under the same key
+  // DLsite would use -- otherwise the work is orphaned (DB has 1100616,
+  // frontend/lookups ask for 01100616 -> 404).
+  data.id = rjcode;
+  // Match DLsite's shape: always-present arrays/objects the insert path guards
+  // on. ASMR.one omits these when empty.
+  if (!data.illustrators) data.illustrators = [];
+  if (!data.scriptWriters) data.scriptWriters = [];
+
+  return data;
+}
+
+export { scrapeWorkMetadataFromAsmrOne };

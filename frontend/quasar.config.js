@@ -1,7 +1,7 @@
 // Configuration for your app
 // https://quasar.dev/quasar-cli-webpack/quasar-config-js
 
-const { PUBLIC_PATH_TOKEN } = require('../backend/base-path')
+const { PUBLIC_PATH_TOKEN } = require('../backend/base-path.ts')
 
 module.exports = function (ctx) {
   return {
@@ -94,7 +94,18 @@ module.exports = function (ctx) {
       // makes sass-loader require('sass') in its own CJS context -- the
       // compiler runs in-process, with no native binary or platform package.
       scssLoaderOptions: { implementation: 'sass' },
-      sassLoaderOptions: { implementation: 'sass' }
+      sassLoaderOptions: { implementation: 'sass' },
+
+      // The frontend imports two backend modules that are TypeScript now
+      // (src/utils.js and FilterTerms.vue -> backend/database/search-query).
+      // Quasar only resolves `.ts` for a TypeScript project (it looks for a
+      // frontend/tsconfig.json), and these are plain JS-compatible modules, so
+      // all webpack needs is the extension.
+      extendWebpack (cfg) {
+        if (!cfg.resolve.extensions.includes('.ts')) {
+          cfg.resolve.extensions.push('.ts')
+        }
+      }
     },
 
 

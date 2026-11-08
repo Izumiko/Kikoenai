@@ -1,0 +1,114 @@
+// @ts-nocheck
+/*
+ * Read a work's track list out of its scraped description.
+ *
+ * Orchestration only: it pulls the work, its files and its description
+ * together and hands them to the pure pipeline in track-titles.js, which knows
+ * nothing about the database. Keeping that split is what lets
+ * test/track-titles.js exercise the prompt and the verbatim guard with no
+ * database at all.
+ *
+ * Driven over Socket.IO rather than a route (socket.js), because a local model
+ * regularly takes longer to answer than a reverse proxy will hold a request
+ * open -- nginx's proxy_read_timeout defaults to 60s and Cloudflare caps a
+ * request at 100s regardless of the origin. The scanner has the same shape and
+ * the same reason; see backend/AGENTS.md §2.5.
+ *
+ * It proposes and writes nothing. Applying a list is
+ * PUT /api/work/:id/file-metadata, which the admin reaches after reviewing it.
+ */
+
+import path from 'path';
+
+import db from './database/db.ts';
+import { config } from './config.ts';
+import { listWorkTracks } from './filesystem/workFiles.ts';
+import { isFanzaId } from './work-id.ts';
+import { WORK_ID_RE, normalizeWorkId } from './routes/utils/validate.ts';
+import { AUDIO_EXT, isLlmConfigured, htmlToText, structuredTitles, distinctTrackNames, buildHaystack, buildPrompt, callModel, collectTitles } from './track-titles.ts';
+
+/**
+ * A failure the caller is expected to show the user, as opposed to a bug.
+ * The message is the whole payload -- socket.js only needs to tell the two
+ * apart so it can decide what to log.
+ */
+class SuggestError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SuggestError';
+  }
+}
+
+/**
+ * @param {String} rawWorkId straight from the client -- a socket handler has no
+ *   express-validator chain in front of it, so it is checked here.
+ * @returns {Promise<{titles: String[], trackCount: Number, source: String, unverified: Number}>}
+ *   `titles` is an **ordered list**, not a per-file mapping: placement is the
+ *   caller's job, and the dialog fills a chosen folder positionally. It can be
+ *   shorter than `trackCount` when the model returned fewer, which is why both
+ *   are reported. `unverified` counts titles that were not found in the
+ *   description -- reworded or invented -- which the caller should warn about
+ *   rather than hide.
+ */
+async function suggestTrackTitles(rawWorkId) {
+  if (typeof rawWorkId !== 'string' || !WORK_ID_RE.test(rawWorkId)) {
+    throw new SuggestError(`"${rawWorkId}" is not a valid work id.`);
+  }
+  const workId = normalizeWorkId(rawWorkId);
+
+  const work = await db.knex('t_work')
+    .select('root_folder', 'dir', 'description', 'description_parts')
+    .where('id', workId)
+    .first();
+  if (!work) {
+    throw new SuggestError(`No work with id "${workId}".`);
+  }
+
+  const description = htmlToText(work.description);
+  if (!description) {
+    // Fanza is a dead end rather than a "refresh it" case: scraper/fanza.js
+    // extracts no description at all, so POST /api/refresh changes nothing.
+    throw new SuggestError(isFanzaId(workId)
+      ? 'No description was scraped for this Fanza work, so there is nothing to extract track titles from (DLsite works only).'
+      : `Work ${workId} has no description. Refresh its metadata first.`);
+  }
+
+  const rootFolder = config.rootFolders.find(rf => rf.name === work.root_folder);
+  if (!rootFolder) {
+    throw new SuggestError(`Root folder "${work.root_folder}" not found. Check the library paths in settings.`);
+  }
+
+  const tracks = await listWorkTracks(workId, path.join(rootFolder.path, work.dir));
+  const audio = tracks.filter(t => AUDIO_EXT.includes(t.ext));
+  if (!audio.length) {
+    throw new SuggestError(`Work ${workId} has no audio files.`);
+  }
+
+  // Distinct names, not files: variant folders repeat the same tracks, and the
+  // dialog applies one list per folder anyway.
+  const trackNames = distinctTrackNames(audio);
+  const parts = work.description_parts ? JSON.parse(work.description_parts) : [];
+  const structured = structuredTitles(parts);
+
+  // DLsite published the list itself and it lines up with the tracks on disk --
+  // no model call needed.
+  if (structured.length && structured.length === trackNames.length) {
+    return { titles: structured, trackCount: trackNames.length, source: 'structured', unverified: 0 };
+  }
+
+  if (!isLlmConfigured()) {
+    throw new SuggestError('No LLM is configured on the server (KIKO_LLM_BASE_URL / KIKO_LLM_MODEL).');
+  }
+
+  // mapping:false -- collectTitles places titles by position and never reads a
+  // file mapping, so asking for one would only burn output tokens.
+  const parsed = await callModel(buildPrompt(description, structured), trackNames, { mapping: false });
+  // collectTitles, not validate: this is a proposal the admin reviews, and a
+  // title dropped for not being verbatim leaves a gap that shifts every later
+  // one onto the wrong file when the list is applied positionally.
+  const { titles, unverified } = collectTitles(parsed, buildHaystack(description, parts));
+
+  return { titles, trackCount: trackNames.length, source: 'llm', unverified };
+}
+
+export { suggestTrackTitles, SuggestError };

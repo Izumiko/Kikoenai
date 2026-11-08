@@ -1,0 +1,99 @@
+// @ts-nocheck
+
+import yargs from 'yargs/yargs';
+import { hideBin } from 'yargs/helpers';
+import { performUpdate } from './scannerModules.ts';
+
+const argv = yargs(hideBin(process.argv))
+    .option('refreshAll', {
+        alias: 'all',
+        description: 'Refresh both dynamic and static metadata',
+        type: 'boolean',
+    })
+    .option('includeNSFW', {
+      alias: 'nsfw',
+      description: 'Refresh dynamic metadata and nsfw field',
+      type: 'boolean',
+    })
+    .option('includeTags', {
+      alias: 'tags',
+      description: 'Refresh dynamic metadata and tags',
+      type: 'boolean',
+    })
+    .option('includeVA', {
+      alias: 'vas',
+      description: 'Refresh dynamic metadata and voice actors',
+      type: 'boolean',
+    })
+    .option('includeIllustrator', {
+      alias: 'illust',
+      description: 'Refresh dynamic metadata and illustrators',
+      type: 'boolean',
+    })
+    .option('includeScriptWriter', {
+      alias: 'scenario',
+      description: 'Refresh dynamic metadata and script writers',
+      type: 'boolean',
+    })
+    .option('includeSeries', {
+      alias: 'series',
+      description: 'Refresh dynamic metadata and series',
+      type: 'boolean',
+    })
+    .option('includeAuthor', {
+      alias: 'author',
+      description: 'Refresh dynamic metadata and authors (作者)',
+      type: 'boolean',
+    })
+    .option('includeDescription', {
+      alias: 'description',
+      description: 'Refresh dynamic metadata and the work description (no image download)',
+      type: 'boolean',
+    })
+    .option('includeImages', {
+      alias: 'images',
+      description: 'Re-download the sample and description images (one request per image)',
+      type: 'boolean',
+    })
+    .option('includeReviews', {
+      alias: 'reviews',
+      description: 'Re-scrape every DLsite user review (paginated, one request per 50)',
+      type: 'boolean',
+    })
+    .argv;
+
+const updateOptions = {};
+
+if (argv.refreshAll) {
+  updateOptions.refreshAll = true;
+} else if (argv.includeNSFW) {
+  updateOptions.includeNSFW = true;
+} else if (argv.includeTags) {
+  updateOptions.includeTags = true;
+} else if (argv.includeVA) {
+  updateOptions.includeVA = true;
+} else if (argv.includeIllustrator) {
+  updateOptions.includeIllustrator = true;
+} else if (argv.includeScriptWriter) {
+  updateOptions.includeScriptWriter = true;
+} else if (argv.includeSeries) {
+  updateOptions.includeSeries = true;
+} else if (argv.includeAuthor) {
+  updateOptions.includeAuthor = true;
+} else if (argv.includeDescription) {
+  updateOptions.includeDescription = true;
+} else if (argv.includeImages) {
+  // Implies the description refresh: the image list comes from the same scrape.
+  updateOptions.includeDescription = true;
+  updateOptions.includeImages = true;
+} else if (argv.includeReviews) {
+  updateOptions.includeReviews = true;
+}
+
+performUpdate(updateOptions)
+  .then(() => {
+    process.exit(0);
+  })
+  .catch(err => {
+    throw err;
+  });

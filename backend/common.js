@@ -1,1 +1,0 @@
-// This file is intentionally left empty after removing AI translation lyrics feature.
