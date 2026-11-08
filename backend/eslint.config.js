@@ -27,9 +27,10 @@ const globals = {
 };
 
 export default [
-  // Ignore dist directory
+  // Ignore build output: dist/ is the frontend build, build/ the bundled
+  // backend (scripts/build.ts), and both are minified.
   {
-    ignores: ['dist/', 'node_modules/', 'test_data_root/', 'test/*.sqlite3'],
+    ignores: ['dist/', 'build/', 'node_modules/', 'test_data_root/', 'test/*.sqlite3'],
   },
   // Main configuration
   {

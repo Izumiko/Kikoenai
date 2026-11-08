@@ -16,6 +16,8 @@
   },
   "scripts": {
     "start": "cross-env NODE_ENV=production node --trace-warnings app.ts",
+    "start:bundle": "cross-env NODE_ENV=production node --trace-warnings build/app.mjs",
+    "build": "node scripts/build.ts",
     "dev": "node --watch --watch-path=auth --watch-path=database --watch-path=filesystem --watch-path=lib --watch-path=routes --watch-path=scraper --watch-path=scripts --watch-path=test --watch-path=types --watch-path=app.ts --watch-path=api.ts --watch-path=asr.ts --watch-path=base-path.ts --watch-path=common.ts --watch-path=config.ts --watch-path=socket.ts --watch-path=suggest-track-titles.ts --watch-path=track-titles.ts --watch-path=transcribe-work.ts --watch-path=upgrade.ts --watch-path=work-id.ts --trace-warnings app.ts",
     "scan": "node --trace-warnings ./filesystem/scanner.ts",
     "backfill:progress": "node --trace-warnings ./scripts/backfill-progress.ts",
@@ -23,7 +25,8 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "npm run lint && npm run typecheck && node --import ./test/setup-env.ts --test --test-concurrency=1 test/backfill-progress.ts test/base-path.ts test/data-root.ts test/description-html.ts test/edit-metadata.ts test/history-seconds.ts test/import-legacy-history.ts test/lib.ts test/lyric-discovery.ts test/migration-names.ts test/migration..ts test/node-sqlite-client.ts test/progress-projections.ts test/scan-logging.ts test/search-query.ts test/track-identity.ts test/track-progress-freshness.ts test/track-titles.ts test/transcode-filename.ts test/transcription.ts test/urljoin.ts test/work-file-listing.ts test/work-files.ts test/work-id.ts test/work-images.ts",
-    "bench": "node --import ./test/setup-env.ts test/benchmark.ts"
+    "bench": "node --import ./test/setup-env.ts test/benchmark.ts",
+    "test:bundle": "node --import ./test/setup-env.ts --test --test-concurrency=1 test/bundle-smoke.ts"
   },
   "bin": "app.ts",
   "pkg": {
@@ -71,6 +74,7 @@
     "@types/node": "^26.6.6",
     "@types/serve-index": "^1.9.4",
     "cross-env": "^10.1.0",
+    "esbuild": "^0.27.7",
     "eslint": "^10.14.0",
     "eslint-plugin-n": "^18.5.0",
     "serve-index": "^1.9.1",

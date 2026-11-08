@@ -139,3 +139,6 @@ graph.svg
 dist/
 dist_*/
 temp/
+
+# Bundled backend deployment directory (scripts/build.ts)
+build/

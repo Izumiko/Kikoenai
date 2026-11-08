@@ -6,6 +6,7 @@ import type { ChildProcess } from 'child_process';
 import type { Server as HttpServer } from 'http';
 import type { Server as HttpsServer } from 'https';
 import { config } from './config.ts';
+import { appDir } from './app-dir.ts';
 import { SESSION_COOKIE, getSession } from './auth/session.ts';
 import { suggestTrackTitles, SuggestError } from './suggest-track-titles.ts';
 import { transcribeWork, AsrError } from './transcribe-work.ts';
@@ -19,6 +20,31 @@ import type { ScanCommand, ScanEvent } from './types/scan-events.ts';
 type LastScanEvent =
   | Extract<ScanEvent, { event: 'SCAN_FINISHED' }>
   | { event: 'SCAN_ERROR'; payload: undefined };
+
+// Scanning runs in a forked child process, one script per run type (see
+// backend/AGENTS.md §2.5). The layouts differ between the two ways this file
+// can run:
+//
+//   source run  -- the .ts entry points in filesystem/, next to app-dir.ts
+//   bundle      -- a flat .mjs per entry point beside app.mjs (scripts/build.ts)
+//
+// `import.meta.filename` tells them apart: a source run is the only case where
+// this module is a .ts file. `appDir` is the deployment directory in both (see
+// app-dir.ts), so the fork target and the app share a root either way.
+const IS_BUNDLED_RUN = !import.meta.filename.endsWith('.ts');
+
+/** The scanner entry points that can be forked. */
+export type ScannerScript = 'scanner' | 'updater' | 'workFileScanner';
+
+/**
+ * Absolute path of the forked entry point for `name`.
+ *
+ * `bundled` defaults to how this module was loaded; it is a parameter only so
+ * a test can pin both layouts.
+ */
+export const scannerScriptPath = (name: ScannerScript, bundled: boolean = IS_BUNDLED_RUN): string => (
+  bundled ? path.join(appDir, `${name}.mjs`) : path.join(appDir, 'filesystem', `${name}.ts`)
+);
 
 const initSocket = (server: HttpServer | HttpsServer) => {
   const io = new Server(server, { path: `${config.basePath}/socket.io` });
@@ -54,11 +80,12 @@ const initSocket = (server: HttpServer | HttpsServer) => {
   let scanner: ChildProcess | null = null;
   let lastScanEvent: LastScanEvent | null = null;
 
-  const startScanner = (script: string, args: string[] = []) => {
+  const startScanner = (entryPoint: string, args: string[] = []) => {
     if (scanner) return; // one at a time; see backend/AGENTS.md §3
 
     lastScanEvent = null;
-    scanner = child_process.fork(path.join(import.meta.dirname, script), args, { silent: false });
+    // scannerScriptPath() resolves the .ts/.mjs layout; fork takes the file path.
+    scanner = child_process.fork(entryPoint, args, { silent: false });
 
     scanner.on('exit', (code) => {
       scanner = null;
@@ -106,11 +133,11 @@ const initSocket = (server: HttpServer | HttpsServer) => {
       }
     });
 
-    socket.on('PERFORM_SCAN', () => startScanner('./filesystem/scanner.ts'));
+    socket.on('PERFORM_SCAN', () => startScanner(scannerScriptPath('scanner')));
 
-    socket.on('PERFORM_UPDATE', () => startScanner('./filesystem/updater.ts', ['--refreshAll']));
+    socket.on('PERFORM_UPDATE', () => startScanner(scannerScriptPath('updater'), ['--refreshAll']));
 
-    socket.on('PERFORM_WORK_FILE_SCAN', () => startScanner('./filesystem/workFileScanner.ts'));
+    socket.on('PERFORM_WORK_FILE_SCAN', () => startScanner(scannerScriptPath('workFileScanner')));
 
     socket.on('KILL_SCAN_PROCESS', () => {
       // The button is drawn from client-side state, which can outlive the

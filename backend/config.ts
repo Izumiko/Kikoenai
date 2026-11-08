@@ -2,8 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import type { Config } from './types/config.ts';
-
-const appDir = import.meta.dirname;
+import { appDir } from './app-dir.ts';
 
 // path.resolve, never the raw value: a relative KIKO_DATA_DIR leaves every
 // derived path relative, which res.sendFile rejects and which resolveDataFolder

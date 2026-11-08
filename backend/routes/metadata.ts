@@ -7,6 +7,7 @@ import db from '../database/db.ts';
 import { toTree } from '../filesystem/utils.ts';
 import { listWorkTracks, rescanWorkFiles } from '../filesystem/workFiles.ts';
 import { config } from '../config.ts';
+import { appDir } from '../app-dir.ts';
 import normalize from './utils/normalize.ts';
 import { isValidRequest, workIdParam } from './utils/validate.ts';
 import { sanitizeDescriptionHtml, looksLikeHtml } from './utils/description-html.ts';
@@ -64,7 +65,7 @@ router.get('/cover/:id',
         // real cover appears once the work is scraped or rescanned, and a long
         // max-age would leave no-image.jpg stuck in place until it expires.
         res.setHeader('Cache-Control', `public, max-age=${COVER_FALLBACK_MAX_AGE}`);
-        res.sendFile(path.join(import.meta.dirname, '../static/no-image.jpg'), (err2) => {
+        res.sendFile(path.join(appDir, 'static/no-image.jpg'), (err2) => {
           if (err2) {
             next(err2);
           }

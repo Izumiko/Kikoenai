@@ -27,6 +27,7 @@ if (process.env.NODE_ENV === 'test' || process.env.CRASH_ON_UNHANDLED) {
 import { initApp } from './database/init.ts';
 import initSocket from './socket.ts';
 import { config } from './config.ts';
+import { appDir } from './app-dir.ts';
 import api from './api.ts';
 import { applyBasePath } from './base-path.ts';
 import { sweepExpired } from './auth/session.ts';
@@ -177,7 +178,9 @@ site.use(history({
 // Built assets whose *contents* name the URL prefix, and the content type to
 // send them back as. Everything else in dist/ is prefix-agnostic and goes
 // straight through express.static.
-const DIST_DIR = path.join(import.meta.dirname, './dist');
+// The built WebApp lives beside the app in both layouts -- backend/ (source
+// run) or build/ (bundle); see app-dir.ts.
+const DIST_DIR = path.join(appDir, './dist');
 const PREFIXED_ASSETS: Record<string, string> = {
   '/index.html': 'text/html; charset=utf-8',
   '/sw.js': 'text/javascript; charset=utf-8',
