@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 set -e
 
-# Start both backend and frontend in development mode
-echo "Starting Kikoeru monorepo development environment..."
-echo "  Backend:  http://localhost:8888"
+# Start the backend (node --watch, :8888) and the frontend (quasar dev, :8080)
+# together. This is what `npm run dev` from the repo root does.
+cd "$(dirname "$0")/.."
+
+echo "Starting Kikoenai monorepo development environment..."
+echo "  Backend:  http://localhost:8888 (node --watch)"
 echo "  Frontend: http://localhost:8080 (proxies /api -> :8888)"
 echo ""
 
-# Start backend
 echo "Starting backend..."
-cd "$(dirname "$0")/../backend"
-npm run dev &
+npm run dev:backend &
 BACKEND_PID=$!
 
-# Start frontend
 echo "Starting frontend..."
-cd "$(dirname "$0")/../frontend"
-npm run dev &
+npm run dev:frontend &
 FRONTEND_PID=$!
 
 # Trap to kill both on exit

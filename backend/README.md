@@ -16,6 +16,7 @@ TestFlight：[KikoeruApp](https://number17.online/docs/kikoeru-app/)
 - 支持为音声库添加多个根文件夹
 
 ### 源码安装部署
+需要 Node.js 26 及以上：后端是 TypeScript，由 Node 直接运行，无需编译。
 将kikoeru-quasar项目生成的SPA或PWA文件夹全部文件置于`dist`文件夹下，确保`dist/index.html`存在，然后：
 ```bash
 # 安装依赖
@@ -31,22 +32,20 @@ npm start
 PWA的优点：基本页面零延迟，可以像手机APP一样通过浏览器“添加到桌面”的方式安装成App。作者自己使用的前端版本。  
 缺点：更新新版本时需要至少多刷新一次。  
 
-本项目还有打包好的 **Windows 系统下可用的 exe 可执行文件**与 **docker 镜像**版本，docker镜像及docker-compose的使用说明详见[**用户文档**](https://github.com/umonaca/kikoeru-express/wiki/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E)  
-使用docker-compose只需调整`docker-compose.yml`内的挂载位置以符合您的存储路径即可。
+本项目还有打包好的 **Windows 便携压缩包**（`npm run package:windows` 生成，内含 Node 运行时、`build/` 产物与 ffmpeg）与 **docker 镜像**版本，docker 镜像及 compose 的使用说明详见[**用户文档**](https://github.com/umonaca/kikoeru-express/wiki/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E)  
+使用 compose 时只需调整 `compose-example.yaml` 内的挂载位置以符合您的存储路径即可。
 
 ### 技术栈
-- axios (网络请求)
+- TypeScript (严格模式，由 Node.js 26 原生运行，无需编译)
 - express (构建后端服务)
-- sqlite3 (文件型数据库)
-- knexjs (操作数据库)
-- knex-migrate (数据库迁移)
+- node:sqlite (Node.js 内置 SQLite 驱动，替代 sqlite3)
+- knexjs (操作数据库，迁移使用 knex 自带的迁移引擎)
 - cheerio (将 html 解析为 jQuery 对象)
-- jsonwebtoken (用户认证)
 - socket.io (用于将扫描音声库的结果实时传给客户端)
-- lrc-file-parser (解析播放LRC歌词文件)
 - jschardet (判断文本文件编码)
 - child_process (nodejs 子进程)
-- pkg (打包为可执行文件)
+- esbuild (打包为自包含的 build/ 目录)
+- node:test (内置测试框架)
 
 
 ### 项目目录结构
@@ -57,20 +56,22 @@ PWA的优点：基本页面零延迟，可以像手机APP一样通过浏览器�
 ├── database/                # 操作数据库相关代码
 ├── dist/                    # 存放前端项目 kikoeru-quasar 构建的 PWA
 ├── filesystem/              # 存放扫描相关代码
-├── package/                 # 存放 pkg 打包后的可执行文件
-├── package-macos/           # 存放 pkg 打包后的可执行文件
+├── lib/                     # 替代已移除依赖的本地模块
 ├── scraper/                 # 存放爬虫相关代码
+├── scripts/                 # 维护脚本与 esbuild 打包脚本
 ├── sqlite/                  # 存放 sqlite 数据库文件
 ├── static/                  # 存放静态资源
+├── types/                   # 共享类型声明
+├── build/                   # esbuild 打包产物，自包含部署目录（自动生成）
 ├── .gitignore               # git 忽略路径
-├── .dockerignore            # Docker 忽略路径
-├── api.js                   # 为 express 实例添加路由与 jwt 验证中间件
-├── app.js                   # 项目入口文件
-├── socket.js                # 用于初始化socket.io
-├── config.js                # 用于生成与修改 config.json 配置文件，导出公共配置以及升级锁
-├── docker-compose.yml       # 用于使用docker-compose一键构建环境
+├── .containerignore         # 容器构建忽略路径
+├── api.ts                   # 为 express 实例添加路由与 session 验证中间件
+├── app.ts                   # 项目入口文件
+├── socket.ts                # 用于初始化socket.io
+├── config.ts                # 用于生成与修改 config.json 配置文件，导出公共配置以及升级锁
 ├── package.json             # npm 脚本和依赖项
-├── eslintrc.json            # ESLint
+├── eslint.config.js         # ESLint
+├── tsconfig.json            # TypeScript 配置
 ├── Changelog.md             # 最近的版本历史
 ```
 

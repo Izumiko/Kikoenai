@@ -16,13 +16,17 @@ So this repo is created to make the project monorepo again and to continue the d
 ```
 kikoenai/
 ├── package.json            # Root workspace config
-├── backend/                # Express API server (kikoeru-express)
-│   ├── app.js              # Server entry point
+├── UPSTREAM.md             # How this fork syncs with Rivers47/Kikoenai
+├── backend/                # Express API server (kikoeru-express), TypeScript
+│   ├── app.ts              # Server entry point (run natively by Node 26)
 │   ├── routes/             # API routes
-│   ├── database/           # SQLite + Knex
+│   ├── database/           # SQLite (node:sqlite) + Knex
 │   ├── filesystem/         # Scanner & file utilities
 │   ├── scraper/            # Metadata scrapers (DLSite, etc.)
-│   └── dist/               # Frontend build output (auto-generated)
+│   ├── lib/                # Small local replacements for removed packages
+│   ├── scripts/build.ts    # esbuild bundler → build/
+│   ├── build/              # Self-contained deployment unit (auto-generated)
+│   └── dist/               # Frontend build output (auto-generated, copied into build/)
 ├── frontend/               # Vue 3 / Quasar PWA (kikoeru-quasar)
 │   ├── quasar.config.js
 │   ├── src/
@@ -34,14 +38,18 @@ kikoenai/
 │   └── src-pwa/            # PWA service worker
 └── scripts/
     ├── dev.sh              # Start both in dev mode
-    └── build.sh            # Build frontend for production
+    ├── build.sh            # Build frontend + backend bundle
+    └── package.js          # Build the Windows portable zip
 ```
 
 ## Quick Start
 
 ### Windows
-Download the zip from the release page.  Double click `Kikoenai.bat`. Put your works in `VoiceWork\`.
-When upgrading, copy the exe to the old folder.
+Download the portable zip from the release page and unzip it anywhere. Double click
+`Kikoenai.bat`. Put your works in `VoiceWork\`.
+When upgrading, replace the `app\` folder (and `node\` if the runtime changed) in
+your existing installation; your data folders (`config\`, `sqlite\`, `covers\`,
+`images\`, `VoiceWork\`) stay where they are.
 
 ### First Login
 
@@ -136,6 +144,9 @@ For more advanced usage please see the Github Wiki page
 
 ## Development
 
+Node **>= 26** is required: the backend is TypeScript that Node runs natively,
+so there is no compile step in development.
+
 ```bash
 # Install all dependencies
 npm install
@@ -146,7 +157,7 @@ npm run dev
 ```
 
 This starts:
-- **Backend** at http://localhost:8888 (Express API with hot-reload via nodemon)
+- **Backend** at http://localhost:8888 (Express API, restarted on changes by `node --watch`)
 - **Frontend** at http://localhost:8080 (Quasar dev server with HMR, proxies `/api` to backend)
 
 ### Production Build
@@ -155,25 +166,46 @@ This starts:
 # Install dependencies
 npm install
 
-# Build frontend and prepare for production
+# Build the frontend (debug) plus the backend bundle into backend/build/
 npm run build
 
-# Start the production server
-npm start
+# Or: production frontend (minified) plus the backend bundle
+npm run build:prod
+
+# Run the self-contained bundle
+npm run start:bundle -w backend
 ```
+
+`backend/build/` is the deployment unit — `app.mjs`, the forked scanner entry
+points, their chunks, the WebApp (`dist/`) and `static/`. It needs Node and the
+`ffmpeg`/`ffprobe` binaries, but no `node_modules` and no `.ts` sources.
+
+`npm start` is the other way to run the server: it runs the TypeScript sources
+directly (`node app.ts`) and, like the bundle, serves whichever `backend/dist/`
+you last built. Set `KIKO_DATA_DIR` to keep data somewhere other than the
+application directory (see `backend/AGENTS.md` §2.4).
+
 ### Individual Package Scripts
 
 Each package retains its own scripts, accessible via npm workspaces:
 
 ```bash
-npm run dev:backend    # Backend only (nodemon)
-npm run dev:frontend   # Frontend only (quasar dev)
-npm run build:frontend # Build frontend only
+npm run dev:backend      # Backend only (node --watch)
+npm run dev:frontend     # Frontend only (quasar dev)
+npm run build:frontend   # Build frontend only
+npm run build:backend    # Bundle backend only
+
+npm test -w backend      # ESLint + typecheck + node:test
+npm run typecheck        # tsc --noEmit
+npm run test:bundle -w backend   # Build and smoke-test backend/build/
+npm run test:package     # Windows zip writer round-trip test
+npm run check:lyrics -- <folder> # Diagnose lyric files in one work folder
+npm run package:windows  # Build the Windows portable zip (see scripts/package.js)
 ```
 
 ## Integration
 
-The frontend builds directly into `backend/dist/`, which is served as static content by the Express server. This is configured via `distDir` in `frontend/quasar.config.js`.
+The frontend builds directly into `backend/dist/`, which is served as static content by the Express server. This is configured via `distDir` in `frontend/quasar.config.js`. The backend bundle copies `backend/dist/` and `backend/static/` into `backend/build/`, so that directory is the complete deployable application. The container image and the Windows portable zip both ship exactly that directory.
 
 
 ## TODO

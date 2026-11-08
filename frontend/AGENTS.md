@@ -330,7 +330,7 @@ fire on a sub-path install.
 
 Both ends of Socket.IO apply the prefix themselves, because it hangs off the
 raw HTTP server rather than the Express router: `boot/socket.io.js` sets
-`path: \`${basePath}/socket.io\``, mirroring `backend/socket.js`.
+`path: \`${basePath}/socket.io\``, mirroring `backend/socket.ts`.
 
 The service worker is registered at `${basePath}/sw.js` **with an explicit
 `scope`** — a worker can never control a broader path than its own URL, so a
@@ -341,7 +341,7 @@ sub-path install would otherwise register a worker that controls nothing.
 1. **Infinite Scroll:** `Works.vue` uses `q-infinite-scroll` to paginate results (triggers `onLoad()` callback).
 
 2. **Work page tabs + cover gallery:** `Work.vue` puts the file tree and the scraped description in `q-tabs` + `q-tab-panels`. **The open tab is plain component state, deliberately not in the url** — a reload or a shared link opens on Files. Putting it in the query was tried and dropped as not worth the machinery; `q-route-tabs` was never an option either, since its active state is matched on the path, which is identical for both tabs, so neither would ever highlight without real child routes. The panels are `keep-alive`, and the tree's own folder/image state lives in `?path=`/`?img=`, so switching tabs keeps the open folder and its scroll position. The tab bar only renders when the work has a description at all. The cover itself is `WorkGallery.vue` — a `q-carousel` over the cover plus every **downloaded** scraped image (see `workImageUrl`), with arrows and an `n/N` counter; a work with nothing downloaded shows just the cover and no counter. Clicking a slide opens **`ImageViewer.vue`**, the same maximized pinch/wheel-zoom viewer the file tree uses — it was lifted out of `WorkTree.vue` for this, and takes `[{name, url}]` plus a two-way `index`, leaving the *source* of that index to the caller: the tree keeps it in `?img=` (so Back closes the preview), the gallery keeps it in the carousel's own slide number. The gallery derives its slide urls and its viewer list from one array, so an image with no local file drops out of both at once rather than shifting the captions by one. `Cover.vue` is untouched and still used by the cards, lists and player; its id/release overlays have no room in the carousel, so the work page prints them next to the title instead.
-3. **Cover Blurring:** None. `Cover.vue` renders the cover plus its id/release/tag chips, nothing else. It was called `CoverSFW.vue` until the NSFW blur it was named for turned out never to have been wired up — `:nsfw` was the literal `false` at every call site from the initial commit onward — at which point the dead branch and the misleading name both went. The only age-rating control is the server-side `nsfw=0|1|2` filter in `Works.vue` — see `nsfwFilter` in `backend/database/queries.js`.
+3. **Cover Blurring:** None. `Cover.vue` renders the cover plus its id/release/tag chips, nothing else. It was called `CoverSFW.vue` until the NSFW blur it was named for turned out never to have been wired up — `:nsfw` was the literal `false` at every call site from the initial commit onward — at which point the dead branch and the misleading name both went. The only age-rating control is the server-side `nsfw=0|1|2` filter in `Works.vue` — see `nsfwFilter` in `backend/database/queries.ts`.
 4. **Sleep Timer:** `SleepMode.vue` (opened from the bedtime button in `AudioPlayer.vue`'s settings row) stops playback either after a chosen number of minutes (5-min slider steps) or after a chosen number of tracks past the current one. The armed timer is persisted in `SessionStorage` under the `sleepTimer` key (`SLEEP_TIMER_KEY`) and restored on reload; stop logic lives in `AudioElement.vue` (`onTimeupdate` for minutes, `onEnded` for tracks).
 
    **A tracks-mode stop leaves the queue parked on the track that just finished** — advancing there would report progress for a track the user never heard — so the advance is deferred to their next play (`_advanceIfAtEndOfTrack`, called from the `playing` watcher). A resume opens the same way: the position stored in `t_track_progress` is the end of that track, so the player shows the end of it and only moves on when the user presses play.
@@ -712,7 +712,7 @@ Build output goes directly into `backend/dist/` (configured via `distDir` in `qu
 ## 8. Testing
 
 - **Linting:** ESLint with Vue plugin
-- **Run:** `npm test` from `frontend/`, or `npm run lint` from the repo root (there is no root `npm test`). The root script lints the backend first and **currently fails** on a pre-existing `backend/app.js` hashbang error, so run the frontend lint directly when checking frontend changes.
+- **Run:** `npm test` from `frontend/`, or `npm run lint` from the repo root (there is no root `npm test`; the root script runs the backend lint first, then the frontend checks).
 
 ---
 
