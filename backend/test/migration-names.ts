@@ -1,20 +1,19 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // knex_migrations records migration NAMES, and the CommonJS version of this app
 // wrote the original `.js` filenames. The manifest must keep reporting those
 // names even though the files are `.ts` now: otherwise every migration re-runs
 // against an existing database, and a database created here cannot be opened by
 // upstream (or by an older install of this app).
 
-import chai from 'chai';
-const expect = chai.expect;
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import knexLib from 'knex';
+import knexLib, { type Knex } from 'knex';
 
 import migrations from '../database/migrations/index.ts';
 import knexMigrate from '../database/knex-migrate.ts';
+import type { KnexMigrateProgress } from '../database/knex-migrate.ts';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import * as knexfile from '../database/knexfile.ts';
 import { dbVersion } from '../database/schema.ts';
@@ -62,15 +61,19 @@ const UPSTREAM_MIGRATIONS = [
 // knex-migrate builds its connection from the `test` knexfile env, so these
 // tests point that env at a throwaway database file instead of the suite's
 // shared test/db-test.sqlite3.
-const useDatabaseAt = (filename) => {
-  const original = knexfile.test.connection.filename;
-  knexfile.test.connection.filename = filename;
+// knexfile.test is typed as a Knex.Config, whose `connection` union does not
+// narrow to the SQLite shape; this environment always sets a filename.
+const testConnection = (): Knex.Sqlite3ConnectionConfig => knexfile.test.connection as Knex.Sqlite3ConnectionConfig;
+
+const useDatabaseAt = (filename: string) => {
+  const original = testConnection().filename;
+  testConnection().filename = filename;
   return () => {
-    knexfile.test.connection.filename = original;
+    testConnection().filename = original;
   };
 };
 
-const open = (filename) => knexLib({
+const open = (filename: string): Knex => knexLib({
   client: Client_NodeSQLite,
   connection: { filename },
   useNullAsDefault: true,
@@ -80,20 +83,20 @@ describe('migration manifest', () => {
   it('lists every migration with its original .js name', () => {
     const names = migrations.map((migration) => migration.name);
 
-    expect(names).to.deep.equal(UPSTREAM_MIGRATIONS);
+    assert.deepEqual(names, UPSTREAM_MIGRATIONS);
     for (const name of names) {
-      expect(name).to.match(/\.js$/);
+      assert.match(name, /\.js$/);
     }
     // knex runs the list in order, so it must already be sorted by filename.
-    expect([...names].sort()).to.deep.equal(names);
+    assert.deepEqual([...names].sort(), names);
     for (const migration of migrations) {
-      expect(migration.up).to.be.a('function');
-      expect(migration.down).to.be.a('function');
+      assert.equal(typeof migration.up, 'function');
+      assert.equal(typeof migration.down, 'function');
     }
   });
 
   describe('with a throwaway database', () => {
-    let dir;
+    let dir: string;
 
     beforeEach(() => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiko-migrations-'));
@@ -123,7 +126,7 @@ describe('migration manifest', () => {
       const before = await db('knex_migrations').count('* as c').first();
       await db.destroy();
 
-      const progress = [];
+      const progress: KnexMigrateProgress[] = [];
       const restore = useDatabaseAt(filename);
       try {
         await knexMigrate('up', {}, (event) => progress.push(event));
@@ -131,13 +134,13 @@ describe('migration manifest', () => {
         restore();
       }
 
-      expect(progress).to.deep.equal([]);
+      assert.deepEqual(progress, []);
 
       const after = open(filename);
       const count = await after('knex_migrations').count('* as c').first();
       await after.destroy();
-      expect(count.c).to.equal(before.c);
-      expect(count.c).to.equal(UPSTREAM_MIGRATIONS.length);
+      assert.equal(count!.c, before!.c);
+      assert.equal(count!.c, UPSTREAM_MIGRATIONS.length);
     });
 
     // The migrations are incremental from the v0.3.0 schema, so a database
@@ -161,8 +164,8 @@ describe('migration manifest', () => {
       const lastMigration = await verify('knex_migrations').orderBy('id', 'desc').limit(1);
       await verify.destroy();
 
-      expect(dbVersion).to.be.a('string');
-      expect(lastMigration[0].name.startsWith(dbVersion)).to.equal(true);
+      assert.equal(typeof dbVersion, 'string');
+      assert.equal(lastMigration[0].name.startsWith(dbVersion), true);
     });
   });
 });

@@ -1,36 +1,31 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // Test manual metadata editing and refresh-merge semantics
 
-process.env.FREEZE_CONFIG_FILE = true;
+process.env.FREEZE_CONFIG_FILE = '1';
 process.env.NODE_ENV = 'test';
 
-import chai from 'chai';
-const expect = chai.expect;
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
 import db from '../database/db.ts';
 import { createSchema } from '../database/schema.ts';
 import { nameToUUID } from '../scraper/utils.ts';
+import type { SampleImage } from '../types/scraper.ts';
 
 const TEST_DB = join(import.meta.dirname, 'db-test.sqlite3');
 
 // Wrapper describe so the trailing `after` hook is scoped to this file's
-// suite (runs after both child describes) rather than registered as a global
-// root hook that would only fire after the entire Mocha run. This keeps
-// test/migration..js (which shares db-test.sqlite3) from seeing our schema.
-describe('edit-metadata suite', function () {
-  this.timeout(10000);
+// suite (runs after both child describes) rather than registered as a root
+// hook. This keeps test/migration..ts (which shares db-test.sqlite3) from
+// seeing our schema.
+describe('edit-metadata suite', { timeout: 10000 }, () => {
+describe('editWorkMetadata', { timeout: 10000 }, () => {
 
-describe('editWorkMetadata', function () {
-  // Increase timeout for DB operations
-  this.timeout(10000);
+  let workId: string;
+  let defaultCircleId: string;
 
-  let workId;
-  let defaultCircleId;
-
-  before('Create fresh test schema and insert a work', async function () {
+  before(async () => {
     // Remove old test DB if exists
     if (existsSync(TEST_DB)) {
       // Drop all tables first
@@ -123,9 +118,9 @@ describe('editWorkMetadata', function () {
     });
 
     const work = await db.knex('t_work').select('title', 'nsfw', 'release').where('id', workId).first();
-    expect(work.title).to.equal('新标题');
-    expect(work.nsfw).to.equal(1); // SQLite stores boolean as 0/1
-    expect(work.release).to.equal('2024-06-15');
+    assert.equal(work.title, '新标题');
+    assert.equal(work.nsfw, 1); // SQLite stores boolean as 0/1
+    assert.equal(work.release, '2024-06-15');
   });
 
   it('2. New label by name: add a new tag', async function () {
@@ -143,12 +138,12 @@ describe('editWorkMetadata', function () {
 
     // Check new tag exists in t_tag
     const newTag = await db.knex('t_tag').select('id', 'name').where('name', '全新标签').first();
-    expect(newTag).to.not.be.undefined;
-    expect(newTag.name).to.equal('全新标签');
+    assert.notEqual(newTag, undefined);
+    assert.equal(newTag.name, '全新标签');
 
     // Check relationship exists
     const link = await db.knex('r_tag_work').select('tag_id').where({ tag_id: newTag.id, work_id: workId }).first();
-    expect(link).to.not.be.undefined;
+    assert.notEqual(link, undefined);
   });
 
   it('3. Reuse existing label: duplicate tag name does not create duplicate t_tag row', async function () {
@@ -168,13 +163,13 @@ describe('editWorkMetadata', function () {
     });
 
     const after = await db.knex('t_tag').select('id').where('name', '全新标签');
-    expect(after.length).to.equal(before.length);
+    assert.equal(after.length, before.length);
   });
 
   it('4. Clear list: tags=[] deletes all r_tag_work rows and orphans unused tag', async function () {
     // First count tag links
     const beforeLinks = await db.knex('r_tag_work').select('tag_id').where('work_id', workId);
-    expect(beforeLinks.length).to.be.at.least(1);
+    assert.ok(beforeLinks.length >= 1);
 
     // Count t_tag rows before
     const beforeTags = await db.knex('t_tag').select('id');
@@ -192,11 +187,11 @@ describe('editWorkMetadata', function () {
     });
 
     const afterLinks = await db.knex('r_tag_work').select('tag_id').where('work_id', workId);
-    expect(afterLinks.length).to.equal(0);
+    assert.equal(afterLinks.length, 0);
 
     // The "全新标签" tag should be orphaned and removed
     const orphan = await db.knex('t_tag').select('id').where('name', '全新标签').first();
-    expect(orphan).to.be.undefined;
+    assert.equal(orphan, undefined);
   });
 
   it('5. Circle reassign: change circle name', async function () {
@@ -215,15 +210,15 @@ describe('editWorkMetadata', function () {
     });
 
     const newCircle = await db.knex('t_circle').select('id', 'name').where('name', '新社团').first();
-    expect(newCircle).to.not.be.undefined;
+    assert.notEqual(newCircle, undefined);
 
     const workCircle = await db.knex('t_work').select('circle_id').where('id', workId).first();
-    expect(workCircle.circle_id).to.equal(newCircle.id);
+    assert.equal(workCircle.circle_id, newCircle.id);
 
     // Old circle should be pruned if unused
     const oldCircle = await db.knex('t_circle').select('id').where('id', oldCircleId).first();
     if (oldCircleId !== newCircle.id) {
-      expect(oldCircle).to.be.undefined;
+      assert.equal(oldCircle, undefined);
     }
   });
 
@@ -241,7 +236,7 @@ describe('editWorkMetadata', function () {
     });
 
     const link = await db.knex('r_series_work').select('series_id').where('work_id', workId).first();
-    expect(link).to.be.undefined;
+    assert.equal(link, undefined);
   });
 
   it('7. Transaction atomicity: error mid-way does not persist partial writes', async function () {
@@ -260,7 +255,7 @@ describe('editWorkMetadata', function () {
 
     // Verify initial state
     let work = await db.knex('t_work').select('title').where('id', workId).first();
-    expect(work.title).to.equal('原子测试');
+    assert.equal(work.title, '原子测试');
 
     // Attempt an edit that will fail (e.g. circle name unusually long shouldn't fail - let's use a bad type)
     // SQLite doesn't enforce types strictly. Let's try passing an undefined series that causes our code issue.
@@ -277,7 +272,8 @@ describe('editWorkMetadata', function () {
         title: '不应该生效',
         nsfw: false,
         release: null,
-        circle: null, // This will cause an error in resolveCircle
+        // @ts-expect-error deliberate invalid input: resolveCircle must throw on null
+        circle: null,
         tags: [],
         vas: [],
         illustrators: [],
@@ -287,11 +283,11 @@ describe('editWorkMetadata', function () {
     } catch (err) {
       threw = true;
     }
-    expect(threw).to.be.true;
+    assert.equal(threw, true);
 
     // Verify data wasn't changed
     work = await db.knex('t_work').select('title').where('id', workId).first();
-    expect(work.title).to.equal('原子测试');
+    assert.equal(work.title, '原子测试');
   });
 
   it('8. New label by name: add new VA/illustrator/scriptWriter with brand-new name', async function () {
@@ -310,33 +306,31 @@ describe('editWorkMetadata', function () {
     // Check new VA
     const vaId = nameToUUID('全新声优');
     const va = await db.knex('t_va').select('id', 'name').where('id', vaId).first();
-    expect(va).to.not.be.undefined;
-    expect(va.name).to.equal('全新声优');
+    assert.notEqual(va, undefined);
+    assert.equal(va.name, '全新声优');
 
     const vaLink = await db.knex('r_va_work').select('va_id').where({ va_id: vaId, work_id: workId }).first();
-    expect(vaLink).to.not.be.undefined;
+    assert.notEqual(vaLink, undefined);
 
     // Check new illustrator
     const illId = nameToUUID('全新画师');
     const ill = await db.knex('t_illustrator').select('id', 'name').where('id', illId).first();
-    expect(ill).to.not.be.undefined;
-    expect(ill.name).to.equal('全新画师');
+    assert.notEqual(ill, undefined);
+    assert.equal(ill.name, '全新画师');
 
     // Check new script writer
     const swId = nameToUUID('全新脚本');
     const sw = await db.knex('t_script_writer').select('id', 'name').where('id', swId).first();
-    expect(sw).to.not.be.undefined;
-    expect(sw.name).to.equal('全新脚本');
+    assert.notEqual(sw, undefined);
+    assert.equal(sw.name, '全新脚本');
   });
 });
 
-describe('updateWorkMetadata refresh merge semantics', function () {
-  this.timeout(10000);
-
-  let workId;
+describe('updateWorkMetadata refresh merge semantics', { timeout: 10000 }, () => {
+  let workId: string;
   const origCircleName = '原始刷新社团';
 
-  before('Setup work for refresh merge tests', async function () {
+  before(async () => {
     // Create a circle
     const circleId = nameToUUID(origCircleName);
     await db.knex.raw('INSERT OR IGNORE INTO t_circle(id, name) VALUES (?, ?)', [circleId, origCircleName]);
@@ -381,7 +375,7 @@ describe('updateWorkMetadata refresh merge semantics', function () {
       title: 'DLsite标题',
       nsfw: true,
       release: '2025-01-01',
-      circle: { id: null, name: origCircleName },
+      circle: { name: origCircleName },
       vas: [{ id: nameToUUID('DLsite声优'), name: 'DLsite声优' }],
       illustrators: [],
       scriptWriters: [],
@@ -400,27 +394,27 @@ describe('updateWorkMetadata refresh merge semantics', function () {
 
     // Title should NOT be overwritten (gap-fill: existing title is non-empty)
     const work = await db.knex('t_work').select('title', 'nsfw', 'release').where('id', workId).first();
-    expect(work.title).to.equal('手动编辑的标题');
+    assert.equal(work.title, '手动编辑的标题');
     // nsfw: was false (0), now refresh tries to set true, but gap-fill only fills null
     // Since cur.nsfw = 0 (not null), it should NOT be overwritten
-    expect(work.nsfw).to.equal(0);
+    assert.equal(work.nsfw, 0);
     // release was '' (falsy), so gap-fill should write '2025-01-01'
-    expect(work.release).to.equal('2025-01-01');
+    assert.equal(work.release, '2025-01-01');
 
     // Manually-added VA should still be linked (additive)
     const manualVaId = nameToUUID('手动添加的声优');
     const manualLink = await db.knex('r_va_work').select('va_id').where({ va_id: manualVaId, work_id: workId }).first();
-    expect(manualLink).to.not.be.undefined;
+    assert.notEqual(manualLink, undefined);
 
     // DLsite VA should also be linked
     const dlsiteVaId = nameToUUID('DLsite声优');
     const dlsiteLink = await db.knex('r_va_work').select('va_id').where({ va_id: dlsiteVaId, work_id: workId }).first();
-    expect(dlsiteLink).to.not.be.undefined;
+    assert.notEqual(dlsiteLink, undefined);
 
     // Stats should be updated
     const stats = await db.knex('t_work').select('dl_count', 'price').where('id', workId).first();
-    expect(stats.dl_count).to.equal(200);
-    expect(stats.price).to.equal(1000);
+    assert.equal(stats.dl_count, 200);
+    assert.equal(stats.price, 1000);
   });
 
   it('10. Refresh gap-fill: empty release gets filled, non-empty title stays', async function () {
@@ -452,7 +446,7 @@ describe('updateWorkMetadata refresh merge semantics', function () {
       title: '已有标题',
       nsfw: false,
       release: '2024-12-25',
-      circle: { id: null, name: 'gap测试社团' },
+      circle: { name: 'gap测试社团' },
       vas: [],
       illustrators: [],
       scriptWriters: [],
@@ -469,9 +463,9 @@ describe('updateWorkMetadata refresh merge semantics', function () {
 
     // release was '' -> should be filled to '2024-12-25'
     const work = await db.knex('t_work').select('release', 'title').where('id', gapWorkId).first();
-    expect(work.release).to.equal('2024-12-25');
+    assert.equal(work.release, '2024-12-25');
     // title was already '已有标题' -> stays
-    expect(work.title).to.equal('已有标题');
+    assert.equal(work.title, '已有标题');
   });
 
   it('11. CLI flag includeVA still deletes+reinserts (regression guard)', async function () {
@@ -485,7 +479,7 @@ describe('updateWorkMetadata refresh merge semantics', function () {
       title: 'DLsite标题',
       nsfw: true,
       release: '2025-01-01',
-      circle: { id: null, name: origCircleName },
+      circle: { name: origCircleName },
       vas: [{ id: dlsiteVaId, name: 'DLsite声优' }],
       illustrators: [],
       scriptWriters: [],
@@ -504,11 +498,11 @@ describe('updateWorkMetadata refresh merge semantics', function () {
 
     // The manually-added VA should NO longer be linked (deleted by includeVA)
     const manualLink = await db.knex('r_va_work').select('va_id').where({ va_id: customVaId, work_id: workId }).first();
-    expect(manualLink).to.be.undefined;
+    assert.equal(manualLink, undefined);
 
     // The DLsite VA should be linked
     const dlsiteLink = await db.knex('r_va_work').select('va_id').where({ va_id: dlsiteVaId, work_id: workId }).first();
-    expect(dlsiteLink).to.not.be.undefined;
+    assert.notEqual(dlsiteLink, undefined);
   });
 
   it('11. Refresh keeps the `file` of images already downloaded', async function () {
@@ -517,42 +511,46 @@ describe('updateWorkMetadata refresh merge semantics', function () {
     const newSliderUrl = 'https://img.dlsite.jp/work/RJ654321_img_smp2.jpg';
 
     // What a --images run leaves behind: both kinds, each with its file.
-    await db.setWorkSampleImages(workId, [
+    // `kind` is why the row is in the stored list at all, so it is part of the
+    // fixture even though SampleImage itself does not carry it.
+    const stored: Array<SampleImage & { kind: string }> = [
       { kind: 'smp', url: sliderUrl, file: 'RJ654321_img_smp1.jpg' },
       { kind: 'part', url: partUrl, file: 'RJ654321_img_part1.jpg' },
-    ]);
+    ];
+    await db.setWorkSampleImages(workId, stored);
 
     // A scrape knows nothing about the download: no `file` anywhere, the
     // description images live in descriptionParts, and the slider has grown.
     await db.updateWorkMetadata({
       id: workId,
       title: 'DLsite标题',
-      circle: { id: null, name: origCircleName },
+      circle: { name: origCircleName },
       vas: [], illustrators: [], scriptWriters: [], series: null, tags: [],
       description: '描述',
       descriptionParts: [{ type: 'image', heading: '', text: '', images: [partUrl], tracks: [] }],
       sampleImages: [{ url: sliderUrl }, { url: newSliderUrl }],
     }, { refreshAll: true });
 
-    const { sampleImages } = await db.getWorkExtras(workId);
-    const byUrl = Object.fromEntries(sampleImages.map(image => [image.url, image]));
+    const extras = await db.getWorkExtras(workId);
+    if (!extras) throw new Error('the work should still exist');
+    const byUrl = Object.fromEntries(extras.sampleImages.map(image => [image.url, image]));
 
-    expect(byUrl[sliderUrl].file).to.equal('RJ654321_img_smp1.jpg');
+    assert.equal(byUrl[sliderUrl].file, 'RJ654321_img_smp1.jpg');
     // The description image is only in this list because the download put it
     // there — a wholesale overwrite would drop it entirely.
-    expect(byUrl[partUrl].file).to.equal('RJ654321_img_part1.jpg');
+    assert.equal(byUrl[partUrl].file, 'RJ654321_img_part1.jpg');
     // Newly scraped, never downloaded.
-    expect(byUrl[newSliderUrl].file).to.equal(null);
+    assert.equal(byUrl[newSliderUrl].file, null);
   });
 });
 
-after('Tear down test database', async function () {
-  // Drop all schema objects we created so other test files in the suite
-  // (e.g. test/migration..js) start from a clean slate. Each drop is its own
-  // try/catch so one failure does not abort the rest of the cleanup.
-  // NOTE: do NOT call db.knex.destroy() here — the `db` module is a singleton
-  // shared across the whole Mocha run; destroying it would break later test
-  // files. test/migration..js owns the final knex teardown for the suite.
+after(async () => {
+  // Drop all schema objects we created so test/migration..ts (which shares
+  // db-test.sqlite3) starts from a clean slate. Each drop is its own try/catch
+  // so one failure does not abort the rest of the cleanup. node:test runs each
+  // file in its own process, so this file owns the `db` singleton's connection
+  // and must close it or the process never exits; the shared database file
+  // itself is left in place.
   const dropList = [
     'DROP VIEW IF EXISTS staticMetadata',
     'DROP TABLE IF EXISTS r_tag_work',
@@ -581,11 +579,12 @@ after('Tear down test database', async function () {
   }
 
   // Intentionally do NOT unlink db-test.sqlite3 here: the file is shared with
-  // test/migration..js, and unlinking it while the knex pool still holds an
+  // test/migration..ts, and unlinking it while the knex pool still holds an
   // open fd leaves a deleted inode whose schema is stale, causing the
   // migration test's createOldSchema to fail with "table already exists".
   // Leaving the (now-empty) file in place lets the migration test own final
   // teardown; this file's own `before` hook drops any leftover schema on rerun.
+  await db.knex.destroy();
 });
 
 }); // close wrapper 'edit-metadata suite' describe

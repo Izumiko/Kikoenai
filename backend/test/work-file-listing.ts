@@ -1,5 +1,3 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // A work's file listing comes from t_work_file now, not from walking the folder
 // on every request. These pin the two properties that would break quietly:
 // the order must match what the walk produced, and a work must be walked once
@@ -7,12 +5,12 @@
 
 process.env.FREEZE_CONFIG_FILE = '1';
 
-import chai from 'chai';
-const { expect } = chai;
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import knexLib from 'knex';
+import knexLib, { type Knex } from 'knex';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 
 import { makeQueries } from '../database/queries.ts';
@@ -21,9 +19,12 @@ import { listWorkTracks, indexWorkFiles } from '../filesystem/workFiles.ts';
 import { addWorkFileSchema } from './helpers/schema.ts';
 
 describe('work file listing (t_work_file)', () => {
-  let knex, dbApi, root, workDir;
+  let knex: Knex;
+  let dbApi: { knex: Knex } & ReturnType<typeof makeQueries>;
+  let root: string;
+  let workDir: string;
 
-  const write = (relPath, body = 'x') => {
+  const write = (relPath: string, body = 'x') => {
     const full = path.join(workDir, relPath);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, body);
@@ -64,15 +65,14 @@ describe('work file listing (t_work_file)', () => {
     const walked = (await getTrackList('000001', workDir)).map((t) => t.trackId);
     const listed = (await listWorkTracks('000001', workDir, { dbApi })).map((t) => t.trackId);
 
-    expect(listed).to.deep.equal(walked);
+    assert.deepEqual(listed, walked);
   });
 
   it('carries every tracked file type, not just audio', async () => {
     write('01.mp3'); write('01.lrc'); write('cover.jpg'); write('booklet.pdf'); write('notes.txt');
 
     const listed = await listWorkTracks('000001', workDir, { dbApi });
-    expect(listed.map((t) => t.shortFilePath).sort())
-      .to.deep.equal(['01.lrc', '01.mp3', 'booklet.pdf', 'cover.jpg', 'notes.txt']);
+    assert.deepEqual(listed.map((t) => t.shortFilePath).sort(), ['01.lrc', '01.mp3', 'booklet.pdf', 'cover.jpg', 'notes.txt']);
   });
 
   it('indexes once, then reads without touching the filesystem', async () => {
@@ -80,20 +80,20 @@ describe('work file listing (t_work_file)', () => {
     await listWorkTracks('000001', workDir, { dbApi });
 
     const stamped = await knex('t_work').select('files_indexed_at').where('id', '000001').first();
-    expect(stamped.files_indexed_at, 'files_indexed_at is stamped').to.not.equal(null);
+    assert.notEqual(stamped.files_indexed_at, null, 'files_indexed_at is stamped');
 
     // Delete the folder outright: a second read that still answers proves it is
     // not walking. This is also the unmounted-NAS case.
     fs.rmSync(workDir, { recursive: true, force: true });
     const again = await listWorkTracks('000001', workDir, { dbApi });
-    expect(again.map((t) => t.shortFilePath)).to.deep.equal(['01.mp3']);
+    assert.deepEqual(again.map((t) => t.shortFilePath), ['01.mp3']);
   });
 
   it('does not re-walk a work that is genuinely empty', async () => {
     const listed = await listWorkTracks('000001', workDir, { dbApi });
-    expect(listed).to.deep.equal([]);
+    assert.deepEqual(listed, []);
     const stamped = await knex('t_work').select('files_indexed_at').where('id', '000001').first();
-    expect(stamped.files_indexed_at, 'an empty work is still marked indexed').to.not.equal(null);
+    assert.notEqual(stamped.files_indexed_at, null, 'an empty work is still marked indexed');
   });
 
   // Durations cost an ffprobe each and track titles cost a model call, so the
@@ -110,10 +110,10 @@ describe('work file listing (t_work_file)', () => {
     const listed = await listWorkTracks('000001', workDir, { dbApi, indexedAt: null });
     const byPath = new Map(listed.map((t) => [t.shortFilePath, t]));
 
-    expect(byPath.get('01.mp3').duration).to.equal(61.5);
-    expect(byPath.get('01.mp3').trackTitle).to.equal('Opening');
+    assert.equal(byPath.get('01.mp3')!.duration, 61.5);
+    assert.equal(byPath.get('01.mp3')!.trackTitle, 'Opening');
     // The new one has no duration until a scan probes it -- a request never does.
-    expect(byPath.get('02.mp3').duration).to.equal(undefined);
+    assert.equal(byPath.get('02.mp3')!.duration, undefined);
   });
 
   it('preserves a stored duration when re-indexing without one', async () => {
@@ -124,8 +124,8 @@ describe('work file listing (t_work_file)', () => {
 
     await indexWorkFiles('000001', workDir, undefined, dbApi);
     const [row] = await dbApi.getWorkFiles('000001');
-    expect(row.duration).to.equal(99);
-    expect(row.track_title).to.equal('Kept');
+    assert.equal(row!.duration, 99);
+    assert.equal(row!.track_title, 'Kept');
   });
 
   it('drops rows for files that are gone after a re-index', async () => {
@@ -136,7 +136,7 @@ describe('work file listing (t_work_file)', () => {
     await indexWorkFiles('000001', workDir, undefined, dbApi);
 
     const rows = await dbApi.getWorkFiles('000001');
-    expect(rows.map((r) => r.rel_path)).to.deep.equal(['01.mp3']);
+    assert.deepEqual(rows.map((r) => r.rel_path), ['01.mp3']);
   });
 
   // The write path behind PUT /api/work/:id/file-metadata.
@@ -144,22 +144,22 @@ describe('work file listing (t_work_file)', () => {
     write('01.mp3'); write('02.mp3');
     await listWorkTracks('000001', workDir, { dbApi });
 
-    expect(await dbApi.setTrackTitles('000001', { '01.mp3': 'Opening', '02.mp3': 'Ending' })).to.equal(2);
+    assert.equal(await dbApi.setTrackTitles('000001', { '01.mp3': 'Opening', '02.mp3': 'Ending' }), 2);
     // An empty field in the editor arrives as null and shows the filename again.
-    expect(await dbApi.setTrackTitles('000001', { '02.mp3': null })).to.equal(1);
+    assert.equal(await dbApi.setTrackTitles('000001', { '02.mp3': null }), 1);
 
     const byPath = new Map((await dbApi.getWorkFiles('000001')).map((r) => [r.rel_path, r]));
-    expect(byPath.get('01.mp3').track_title).to.equal('Opening');
-    expect(byPath.get('02.mp3').track_title).to.equal(null);
+    assert.equal(byPath.get('01.mp3')!.track_title, 'Opening');
+    assert.equal(byPath.get('02.mp3')!.track_title, null);
   });
 
   it('leaves another work\'s rows alone', async () => {
     write('01.mp3');
     await listWorkTracks('000001', workDir, { dbApi });
 
-    expect(await dbApi.setTrackTitles('000002', { '01.mp3': 'Wrong work' })).to.equal(0);
+    assert.equal(await dbApi.setTrackTitles('000002', { '01.mp3': 'Wrong work' }), 0);
     const [row] = await dbApi.getWorkFiles('000001');
-    expect(row.track_title).to.equal(null);
+    assert.equal(row!.track_title, null);
   });
 
   it('only attaches duration to audio, matching the walk', async () => {
@@ -170,6 +170,6 @@ describe('work file listing (t_work_file)', () => {
 
     const listed = await listWorkTracks('000001', workDir, { dbApi, indexedAt: null });
     const cover = listed.find((t) => t.shortFilePath === 'cover.jpg');
-    expect(cover).to.not.have.property('duration');
+    assert.ok(!Object.hasOwn(cover!, 'duration'));
   });
 });

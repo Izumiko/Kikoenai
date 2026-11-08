@@ -1,12 +1,10 @@
-// @ts-nocheck
 // Requiring the backfill script pulls in config + database/db; freeze the
 // config file so the test run never writes one, as edit-metadata.js does.
-process.env.FREEZE_CONFIG_FILE = true;
+process.env.FREEZE_CONFIG_FILE = '1';
 
-//eslint-disable-next-line n/no-unpublished-import
-import chai from 'chai';
-const { expect } = chai;
-import knexLib from 'knex';
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import knexLib, { type Knex } from 'knex';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { makeQueries } from '../database/queries.ts';
 import { runBackfill } from '../scripts/backfill-progress.ts';
@@ -16,10 +14,12 @@ import { addWorkFileSchema } from './helpers/schema.ts';
 // state.seconds at all — the position lives in t_track_progress. The backfill
 // used to require state.seconds and skipped those rows entirely.
 describe('backfill reads the position from t_track_progress', () => {
-  let knex, dbApi;
+  let knex: Knex;
+  // The importer's own `dbApi` parameter type; BackfillOptions is not exported.
+  let dbApi: NonNullable<Parameters<typeof runBackfill>[0]>['dbApi'];
 
   // trackId is `${workId}/${relPath}`, and the relPath half is the track_key.
-  const track = (workId, relPath, duration) => ({ trackId: `${workId}/${relPath}`, title: relPath, duration });
+  const track = (workId: string, relPath: string, duration: number) => ({ trackId: `${workId}/${relPath}`, title: relPath, duration });
 
   beforeEach(async () => {
     knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
@@ -60,9 +60,9 @@ describe('backfill reads the position from t_track_progress', () => {
     });
 
     const summary = await run();
-    expect(summary.marked).to.equal(1);
+    assert.equal(summary.marked, 1);
     const review = await knex('t_review').where({ user_name: 'admin', work_id: '000001' }).first();
-    expect(review.progress).to.equal('listened');
+    assert.equal(review.progress, 'listened');
   });
 
   it('leaves a part-played work alone', async () => {
@@ -75,8 +75,8 @@ describe('backfill reads the position from t_track_progress', () => {
     });
 
     const summary = await run();
-    expect(summary.marked).to.equal(0);
-    expect(await knex('t_review').first()).to.equal(undefined);
+    assert.equal(summary.marked, 0);
+    assert.equal(await knex('t_review').first(), undefined);
   });
 
   it('still marks listened from a legacy row that carries its own seconds', async () => {
@@ -86,13 +86,13 @@ describe('backfill reads the position from t_track_progress', () => {
     });
 
     const summary = await run();
-    expect(summary.marked).to.equal(1);
+    assert.equal(summary.marked, 1);
     // ...and seeds the progress row the read path looks up, keyed by the
     // relPath the queue item's trackId already carries — no file read needed.
     const progress = await knex('t_track_progress').where({ work_id: '000002' }).first();
-    expect(progress.track_key).to.equal('01.mp3');
-    expect(progress.seconds).to.equal(599);
-    expect(progress.completed).to.equal(1);
+    assert.equal(progress.track_key, '01.mp3');
+    assert.equal(progress.seconds, 599);
+    assert.equal(progress.completed, 1);
   });
 
   it('does not seed when there is no position to seed from', async () => {
@@ -102,9 +102,9 @@ describe('backfill reads the position from t_track_progress', () => {
     });
 
     const summary = await run();
-    expect(summary.p2SkippedNoSeconds).to.equal(1);
-    expect(summary.p2Seeded).to.equal(0);
-    expect(await knex('t_track_progress').first()).to.equal(undefined);
+    assert.equal(summary.p2SkippedNoSeconds, 1);
+    assert.equal(summary.p2Seeded, 0);
+    assert.equal(await knex('t_track_progress').first(), undefined);
   });
 
   it('writes nothing on a dry run', async () => {
@@ -114,9 +114,9 @@ describe('backfill reads the position from t_track_progress', () => {
     });
 
     const summary = await run(true);
-    expect(summary.marked).to.equal(1);
-    expect(summary.p2Seeded).to.equal(1);
-    expect(await knex('t_review').first()).to.equal(undefined);
-    expect(await knex('t_track_progress').first()).to.equal(undefined);
+    assert.equal(summary.marked, 1);
+    assert.equal(summary.p2Seeded, 1);
+    assert.equal(await knex('t_review').first(), undefined);
+    assert.equal(await knex('t_track_progress').first(), undefined);
   });
 });

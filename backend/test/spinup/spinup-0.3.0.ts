@@ -1,10 +1,10 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
 
 import { knex } from '../../database/db.ts';
 
 // `db` defaults to the suite's shared connection; a caller with its own knex
 // instance (e.g. a throwaway database) can build the same old schema on it.
-const createOldSchema = (db = knex) => db.schema
+const createOldSchema = (db: Knex = knex) => db.schema
   .createTable('t_circle', (table) => {
     table.increments(); // id自增列(INTEGER 类型)，会被用作主键 [社团id]
     table.string('name').notNullable(); // VARCHAR 类型 [社团名称]

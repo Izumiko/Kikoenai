@@ -1,15 +1,14 @@
-// @ts-nocheck
-//eslint-disable-next-line n/no-unpublished-import
-import chai from 'chai';
-const { expect } = chai;
-import knexLib from 'knex';
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import knexLib, { type Knex } from 'knex';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { makeQueries } from '../database/queries.ts';
 
 // applyTrackProgressSeconds is internal; exercise it through getPlayHistory,
 // which is the path /api/history actually uses.
 describe('play history seconds come from t_track_progress', () => {
-  let knex, queries;
+  let knex: Knex;
+  let queries: ReturnType<typeof makeQueries>;
 
   before(async () => {
     knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
@@ -65,19 +64,19 @@ describe('play history seconds come from t_track_progress', () => {
 
   it('overwrites the stale history seconds with the track-progress value', async () => {
     const { works } = await queries.getPlayHistory({ username: 'admin', excludeFinished: 'all' });
-    const fresh = works.find(w => w.id === '000001');
-    expect(JSON.parse(fresh.state).seconds).to.equal(999);
+    const fresh = works.find(w => w.id === '000001')!;
+    assert.equal(JSON.parse(fresh.state!).seconds, 999);
   });
 
   it('does not let a work sharing a track_key overwrite another work\'s position', async () => {
     const { works } = await queries.getPlayHistory({ username: 'admin', excludeFinished: 'all' });
-    expect(JSON.parse(works.find(w => w.id === '000001').state).seconds).to.equal(999);
-    expect(JSON.parse(works.find(w => w.id === '000003').state).seconds).to.equal(111);
+    assert.equal(JSON.parse(works.find(w => w.id === '000001')!.state!).seconds, 999);
+    assert.equal(JSON.parse(works.find(w => w.id === '000003')!.state!).seconds, 111);
   });
 
   it('keeps the stored seconds when the queue item still has a legacy handle', async () => {
     const { works } = await queries.getPlayHistory({ username: 'admin', excludeFinished: 'all' });
-    const legacy = works.find(w => w.id === '000002');
-    expect(JSON.parse(legacy.state).seconds).to.equal(34);
+    const legacy = works.find(w => w.id === '000002')!;
+    assert.equal(JSON.parse(legacy.state!).seconds, 34);
   });
 });

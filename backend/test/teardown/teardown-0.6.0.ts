@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import { knex } from '../../database/db.ts';
 
 const dropDatabase = async () => {

@@ -1,4 +1,0 @@
-{
-  "require": ["test/setup-env.ts"],
-  "extension": ["ts"]
-}

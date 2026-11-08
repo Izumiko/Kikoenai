@@ -1,87 +1,81 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // Advanced search syntax: parser unit tests + end-to-end query behaviour
 
 process.env.FREEZE_CONFIG_FILE = '1';
 
-import chai from 'chai';
-const expect = chai.expect;
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import knexLib from 'knex';
+import knexLib, { type Knex } from 'knex';
 
 import { parseSearchQuery, formatSearchTerm, formatSearchQuery } from '../database/search-query.ts';
+import type { SearchTerm } from '../database/search-query.ts';
 import { makeQueries } from '../database/queries.ts';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { nameToUUID } from '../scraper/utils.ts';
 
 describe('parseSearchQuery()', function () {
   it('splits a bare query into free-text terms', function () {
-    expect(parseSearchQuery('foo bar')).to.deep.equal([
+    assert.deepEqual(parseSearchQuery('foo bar'), [
       { field: null, value: 'foo', raw: 'foo', exact: false, negate: false },
       { field: null, value: 'bar', raw: 'bar', exact: false, negate: false },
     ]);
   });
 
   it('parses a quoted namespaced term with the $ anchor', function () {
-    expect(parseSearchQuery('va:"space separated name$"')).to.deep.equal([
+    assert.deepEqual(parseSearchQuery('va:"space separated name$"'), [
       { field: 'va', value: 'space separated name', raw: 'space separated name', exact: true, negate: false },
     ]);
   });
 
   it('accepts the $ outside the quotes too', function () {
-    expect(parseSearchQuery('va:"space separated name"$')).to.deep.equal([
+    assert.deepEqual(parseSearchQuery('va:"space separated name"$'), [
       { field: 'va', value: 'space separated name', raw: 'space separated name', exact: true, negate: false },
     ]);
   });
 
   it('turns underscores in an unquoted value into spaces', function () {
-    expect(parseSearchQuery('circle:underscore_name')).to.deep.equal([
+    assert.deepEqual(parseSearchQuery('circle:underscore_name'), [
       { field: 'circle', value: 'underscore name', raw: 'underscore_name', exact: false, negate: false },
     ]);
   });
 
   it('keeps underscores inside quotes', function () {
-    expect(parseSearchQuery('circle:"under_score"')[0].value).to.equal('under_score');
+    assert.equal(parseSearchQuery('circle:"under_score"')[0].value, 'under_score');
   });
 
   it('negates a term prefixed with -', function () {
-    expect(parseSearchQuery('-tag:NTR')).to.deep.equal([
+    assert.deepEqual(parseSearchQuery('-tag:NTR'), [
       { field: 'tag', value: 'NTR', raw: 'NTR', exact: false, negate: true },
     ]);
   });
 
   it('resolves namespace aliases case-insensitively', function () {
-    expect(parseSearchQuery('Group:foo CV:bar Illust:baz Scenario:qux').map(t => t.field))
-      .to.deep.equal(['circle', 'va', 'illustrator', 'script_writer']);
+    assert.deepEqual(parseSearchQuery('Group:foo CV:bar Illust:baz Scenario:qux').map(t => t.field), ['circle', 'va', 'illustrator', 'script_writer']);
   });
 
   it('leaves an unknown namespace as free text', function () {
-    expect(parseSearchQuery('foo:bar')).to.deep.equal([
+    assert.deepEqual(parseSearchQuery('foo:bar'), [
       { field: null, value: 'foo:bar', raw: 'foo:bar', exact: false, negate: false },
     ]);
     // maker / seiyuu / actor are deliberately not aliases
-    expect(parseSearchQuery('maker:y seiyuu:z actor:w').map(t => t.field))
-      .to.deep.equal([null, null, null]);
+    assert.deepEqual(parseSearchQuery('maker:y seiyuu:z actor:w').map(t => t.field), [null, null, null]);
   });
 
   it('handles an unterminated quote and an empty query', function () {
-    expect(parseSearchQuery('tag:"unterminated')[0].value).to.equal('unterminated');
-    expect(parseSearchQuery('')).to.deep.equal([]);
-    expect(parseSearchQuery(undefined)).to.deep.equal([]);
+    assert.equal(parseSearchQuery('tag:"unterminated')[0].value, 'unterminated');
+    assert.deepEqual(parseSearchQuery(''), []);
+    assert.deepEqual(parseSearchQuery(undefined), []);
   });
 });
 
 describe('formatSearchQuery()', function () {
-  const fields = (terms) => terms.map(t => [t.field, t.value, t.exact, t.negate]);
+  const fields = (terms: SearchTerm[]) => terms.map(t => [t.field, t.value, t.exact, t.negate]);
 
   it('builds a term from a label, quoting so the name survives verbatim', function () {
-    expect(formatSearchTerm({ field: 'tag', value: 'よしよし', exact: true }))
-      .to.equal('tag:"よしよし$"');
-    expect(formatSearchTerm({ field: 'va', value: 'Some Name', exact: true, negate: true }))
-      .to.equal('-va:"Some Name$"');
-    expect(formatSearchTerm({ field: null, value: 'free text' }))
-      .to.equal('"free text"');
+    assert.equal(formatSearchTerm({ field: 'tag', value: 'よしよし', exact: true }), 'tag:"よしよし$"');
+    assert.equal(formatSearchTerm({ field: 'va', value: 'Some Name', exact: true, negate: true }), '-va:"Some Name$"');
+    assert.equal(formatSearchTerm({ field: null, value: 'free text' }), '"free text"');
   });
 
   it('round-trips whatever the parser produced', function () {
@@ -92,7 +86,7 @@ describe('formatSearchQuery()', function () {
       'va:"名前"',
     ]) {
       const terms = parseSearchQuery(query);
-      expect(fields(parseSearchQuery(formatSearchQuery(terms))), query).to.deep.equal(fields(terms));
+      assert.deepEqual(fields(parseSearchQuery(formatSearchQuery(terms))), fields(terms), query);
     }
   });
 
@@ -100,17 +94,15 @@ describe('formatSearchQuery()', function () {
   // containing one pointing at its own row.
   it('keeps an underscore in a name out of the space substitution', function () {
     const built = formatSearchTerm({ field: 'circle', value: 'A_B', exact: true });
-    expect(built).to.equal('circle:"A_B$"');
-    expect(parseSearchQuery(built)[0].value).to.equal('A_B');
+    assert.equal(built, 'circle:"A_B$"');
+    assert.equal(parseSearchQuery(built)[0].value, 'A_B');
   });
 });
 
-describe('getWorksByFilter() advanced filtering', function () {
-  this.timeout(10000);
-
+describe('getWorksByFilter() advanced filtering', { timeout: 10000 }, () => {
   const TEST_DB = join(import.meta.dirname, 'db-search-test.sqlite3');
-  let knex;
-  let Q;
+  let knex: Knex;
+  let Q: ReturnType<typeof makeQueries>;
 
   const LABELS = {
     t_circle: ['Sound Factory', 'Under Score', 'Other Circle'],
@@ -129,12 +121,12 @@ describe('getWorksByFilter() advanced filtering', function () {
     { id: 'BJ01288313', title: 'Books Work', circle: 'Sound Factory', nsfw: false, va: [], tag: [] },
   ];
 
-  const search = async (filter, opts = {}) => {
+  const search = async (filter: string, opts: { nsfw?: number } = {}) => {
     const { works } = await Q.getWorksByFilter({ filter, ...opts });
     return works.map(w => w.id).sort();
   };
 
-  before('Build a small in-file library', async function () {
+  before(async () => {
     if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
     knex = knexLib({
       client: Client_NodeSQLite,
@@ -194,70 +186,70 @@ describe('getWorksByFilter() advanced filtering', function () {
     }
   });
 
-  after('Drop the test library', async function () {
+  after(async () => {
     if (knex) await knex.destroy();
     if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
   });
 
   it('matches a VA by substring', async function () {
-    expect(await search('va:山田_太郎')).to.deep.equal(['100001', '100002']);
+    assert.deepEqual(await search('va:山田_太郎'), ['100001', '100002']);
   });
 
   it('anchors the match with a trailing $', async function () {
-    expect(await search('va:"山田 太郎$"')).to.deep.equal(['100001']);
+    assert.deepEqual(await search('va:"山田 太郎$"'), ['100001']);
   });
 
   it('matches a circle whose name carries a space', async function () {
-    expect(await search('circle:under_score')).to.deep.equal(['100002']);
+    assert.deepEqual(await search('circle:under_score'), ['100002']);
   });
 
   it('ANDs several terms and honours negation', async function () {
-    expect(await search('tag:癒し -circle:Sound_Factory')).to.deep.equal(['d100001']);
+    assert.deepEqual(await search('tag:癒し -circle:Sound_Factory'), ['d100001']);
   });
 
   it('still matches free text across every field', async function () {
-    expect(await search('記憶')).to.deep.equal(['100002']);
-    expect(await search('癒し')).to.deep.equal(['100001', 'd100001']);
+    assert.deepEqual(await search('記憶'), ['100002']);
+    assert.deepEqual(await search('癒し'), ['100001', 'd100001']);
   });
 
   it('mixes free text, namespaced and negated terms in one query', async function () {
-    expect(await search('癒し circle:Other_Circle')).to.deep.equal(['d100001']);
-    expect(await search('癒し -circle:Other_Circle')).to.deep.equal(['100001']);
-    expect(await search('-癒し')).to.deep.equal(['100002', 'BJ01288313']); // negated bare word
-    expect(await search('RJ100001 tag:癒し')).to.deep.equal(['100001']);
-    expect(await search('RJ100001 tag:NTR')).to.deep.equal([]);
+    assert.deepEqual(await search('癒し circle:Other_Circle'), ['d100001']);
+    assert.deepEqual(await search('癒し -circle:Other_Circle'), ['100001']);
+    assert.deepEqual(await search('-癒し'), ['100002', 'BJ01288313']); // negated bare word
+    assert.deepEqual(await search('RJ100001 tag:癒し'), ['100001']);
+    assert.deepEqual(await search('RJ100001 tag:NTR'), []);
   });
 
   it('still resolves work codes', async function () {
-    expect(await search('RJ100001')).to.deep.equal(['100001']);
-    expect(await search('id:100002')).to.deep.equal(['100002']);
+    assert.deepEqual(await search('RJ100001'), ['100001']);
+    assert.deepEqual(await search('id:100002'), ['100002']);
   });
 
   it('resolves DLsite books ids without dropping the BJ prefix', async function () {
-    expect(await search('BJ01288313')).to.deep.equal(['BJ01288313']);
-    expect(await search('bj01288313')).to.deep.equal(['BJ01288313']);
-    expect(await search('id:BJ01288313')).to.deep.equal(['BJ01288313']);
+    assert.deepEqual(await search('BJ01288313'), ['BJ01288313']);
+    assert.deepEqual(await search('bj01288313'), ['BJ01288313']);
+    assert.deepEqual(await search('id:BJ01288313'), ['BJ01288313']);
   });
 
   it('takes a Fanza id with or without the underscore', async function () {
     // ids are stored underscore-free since migration 20260828000000; the
     // underscore form is still accepted, because that is what DMM prints
-    expect(await search('d100001')).to.deep.equal(['d100001']);
-    expect(await search('d_100001')).to.deep.equal(['d100001']);
-    expect(await search('id:d100001')).to.deep.equal(['d100001']);
-    expect(await search('id:d_100001')).to.deep.equal(['d100001']);
-    expect(await search('d100001 tag:癒し')).to.deep.equal(['d100001']);
+    assert.deepEqual(await search('d100001'), ['d100001']);
+    assert.deepEqual(await search('d_100001'), ['d100001']);
+    assert.deepEqual(await search('id:d100001'), ['d100001']);
+    assert.deepEqual(await search('id:d_100001'), ['d100001']);
+    assert.deepEqual(await search('d100001 tag:癒し'), ['d100001']);
     // the bare form only counts as a whole term: `CD100001` must not be read
     // as the Fanza cid d_100001 (it falls through to the DLsite code path)
-    expect(await search('CD100001')).to.deep.equal(['100001']);
+    assert.deepEqual(await search('CD100001'), ['100001']);
   });
 
   it('ANDs the nsfw filter with an OR-ing free-text term', async function () {
-    expect(await search('癒し', { nsfw: 2 })).to.deep.equal(['d100001']);
-    expect(await search('癒し', { nsfw: 1 })).to.deep.equal(['100001']);
+    assert.deepEqual(await search('癒し', { nsfw: 2 }), ['d100001']);
+    assert.deepEqual(await search('癒し', { nsfw: 1 }), ['100001']);
   });
 
   it('returns the whole library for an empty filter', async function () {
-    expect(await search('')).to.deep.equal(['100001', '100002', 'BJ01288313', 'd100001']);
+    assert.deepEqual(await search(''), ['100001', '100002', 'BJ01288313', 'd100001']);
   });
 });

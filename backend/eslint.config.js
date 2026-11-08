@@ -4,8 +4,9 @@
 import nodePlugin from 'eslint-plugin-n';
 import tseslint from 'typescript-eslint';
 
-// Node.js + Mocha globals. The backend is ESM, so there are no CommonJS
-// globals (require/module/exports/__dirname) to declare any more.
+// Node.js globals. The backend is ESM, so there are no CommonJS globals
+// (require/module/exports/__dirname) to declare any more, and node:test's
+// describe/it/hooks are imported by each test file rather than injected.
 const globals = {
   console: 'readonly',
   process: 'readonly',
@@ -23,12 +24,6 @@ const globals = {
   fetch: 'readonly',
   AbortController: 'readonly',
   AbortSignal: 'readonly',
-  describe: 'readonly',
-  it: 'readonly',
-  before: 'readonly',
-  after: 'readonly',
-  beforeEach: 'readonly',
-  afterEach: 'readonly',
 };
 
 export default [

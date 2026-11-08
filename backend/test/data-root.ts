@@ -1,5 +1,3 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // KIKO_DATA_DIR resolution. The failure these pin is a data folder that grows
 // a level on every startup, because setConfig persists each round: `covers` ->
 // `data/covers` -> `data/data/covers`, surfacing much later as res.sendFile
@@ -10,8 +8,8 @@
 
 process.env.FREEZE_CONFIG_FILE = '1';
 
-import chai from 'chai';
-const { expect } = chai;
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
@@ -29,7 +27,12 @@ const FOLDER_KEYS = [
  * Boot config.ts in a child process with the given KIKO_DATA_DIR and report
  * what it resolved. `cwd` is where a relative value is measured from.
  */
-const bootConfig = (dataRoot, cwd) => {
+interface BootedConfig {
+  dataRoot: string;
+  config: Record<string, string>;
+}
+
+const bootConfig = (dataRoot: string, cwd: string): BootedConfig => {
   // config.ts is ESM now, so the child runs as a module and imports it
   // dynamically (--input-type=module gives `-e` ESM semantics).
   const script = `
@@ -46,7 +49,7 @@ const bootConfig = (dataRoot, cwd) => {
 };
 
 describe('KIKO_DATA_DIR', () => {
-  let root;
+  let root: string;
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'kiko-root-'));
@@ -60,9 +63,9 @@ describe('KIKO_DATA_DIR', () => {
     fs.mkdirSync(path.join(root, 'test_data_root'));
     const { dataRoot } = bootConfig('test_data_root', root);
 
-    expect(path.isAbsolute(dataRoot)).to.equal(true);
+    assert.equal(path.isAbsolute(dataRoot), true);
     // fs.realpath: macOS hands out /var/folders symlinked from /private/var.
-    expect(fs.realpathSync(dataRoot)).to.equal(fs.realpathSync(path.join(root, 'test_data_root')));
+    assert.equal(fs.realpathSync(dataRoot), fs.realpathSync(path.join(root, 'test_data_root')));
   });
 
   it('gives every data folder an absolute path, nested exactly once', () => {
@@ -70,10 +73,10 @@ describe('KIKO_DATA_DIR', () => {
     const { config } = bootConfig('test_data_root', root);
 
     for (const key of FOLDER_KEYS) {
-      expect(path.isAbsolute(config[key]), `${key} should be absolute`).to.equal(true);
+      assert.equal(path.isAbsolute(config[key]), true, `${key} should be absolute`);
       // The bug's signature: the data root's own name repeated in the path.
       const repeats = config[key].split(path.sep).filter(seg => seg === 'test_data_root').length;
-      expect(repeats, `${key} = ${config[key]}`).to.equal(1);
+      assert.equal(repeats, 1, `${key} = ${config[key]}`);
     }
   });
 
@@ -90,7 +93,7 @@ describe('KIKO_DATA_DIR', () => {
     const second = bootConfig('test_data_root', root).config;
 
     for (const key of FOLDER_KEYS) {
-      expect(second[key], key).to.equal(first[key]);
+      assert.equal(second[key], first[key], key);
     }
   });
 
@@ -98,7 +101,7 @@ describe('KIKO_DATA_DIR', () => {
   // legacy app-dir path to rerootFromAppDir. Absolute values hit this too.
   describe('with the data root inside the application directory', () => {
     const appDir = path.join(import.meta.dirname, '..');
-    let inside;
+    let inside: string;
 
     beforeEach(() => {
       inside = fs.mkdtempSync(path.join(appDir, 'kiko-inside-'));
@@ -111,7 +114,7 @@ describe('KIKO_DATA_DIR', () => {
     it('does not re-root paths that already live there', () => {
       const { config } = bootConfig(inside, appDir);
       for (const key of FOLDER_KEYS) {
-        expect(config[key], key).to.equal(path.join(inside, path.basename(config[key])));
+        assert.equal(config[key], path.join(inside, path.basename(config[key])), key);
       }
     });
 
@@ -124,7 +127,7 @@ describe('KIKO_DATA_DIR', () => {
 
       const second = bootConfig(inside, appDir).config;
       for (const key of FOLDER_KEYS) {
-        expect(second[key], key).to.equal(first[key]);
+        assert.equal(second[key], first[key], key);
       }
     });
 
@@ -137,7 +140,7 @@ describe('KIKO_DATA_DIR', () => {
         JSON.stringify({ version: '0.0.0', coverFolderDir: legacy, coverUseDefaultPath: false }));
 
       const { config } = bootConfig(inside, appDir);
-      expect(config.coverFolderDir).to.equal(path.join(inside, 'covers'));
+      assert.equal(config.coverFolderDir, path.join(inside, 'covers'));
     });
   });
 
@@ -146,8 +149,8 @@ describe('KIKO_DATA_DIR', () => {
     fs.mkdirSync(absolute);
     const { dataRoot, config } = bootConfig(absolute, os.tmpdir());
 
-    expect(dataRoot).to.equal(absolute);
-    expect(config.coverFolderDir).to.equal(path.join(absolute, 'covers'));
-    expect(config.lyricFolderDir).to.equal(path.join(absolute, 'lyrics'));
+    assert.equal(dataRoot, absolute);
+    assert.equal(config.coverFolderDir, path.join(absolute, 'covers'));
+    assert.equal(config.lyricFolderDir, path.join(absolute, 'lyrics'));
   });
 });

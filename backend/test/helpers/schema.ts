@@ -1,4 +1,5 @@
-// @ts-nocheck
+import type { Knex } from 'knex';
+
 /*
  * Fixture schema for the t_work_file listing.
  *
@@ -11,7 +12,7 @@
  * No foreign key: fixtures create t_work with whatever columns they need, and
  * SQLite only enforces FKs with the pragma on anyway.
  */
-async function addWorkFileSchema (knex) {
+async function addWorkFileSchema (knex: Knex) {
   if (await knex.schema.hasTable('t_work')) {
     if (!(await knex.schema.hasColumn('t_work', 'files_indexed_at'))) {
       await knex.schema.alterTable('t_work', (t) => { t.datetime('files_indexed_at'); });

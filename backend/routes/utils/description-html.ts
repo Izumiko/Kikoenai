@@ -126,7 +126,7 @@ interface SampleImage {
  *   downloaded file for each remote url.
  * @returns {String} Markup safe for v-html, '' when nothing is left.
  */
-function sanitizeDescriptionHtml(html: string, workId: string, sampleImages: SampleImage[] = []): string {
+function sanitizeDescriptionHtml(html: string | null, workId: string, sampleImages: SampleImage[] = []): string {
   if (!html) return '';
 
   // Remote url -> local file name, for the images that were downloaded.

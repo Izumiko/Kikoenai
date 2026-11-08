@@ -1,20 +1,19 @@
-// @ts-nocheck
 // Requiring the importer pulls in config + database/db; freeze the config file
 // so the test run never writes one, as backfill-progress.js's test does.
-process.env.FREEZE_CONFIG_FILE = true;
+process.env.FREEZE_CONFIG_FILE = '1';
 
-//eslint-disable-next-line n/no-unpublished-import
-import chai from 'chai';
-const { expect } = chai;
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import knexLib from 'knex';
+import knexLib, { type Knex } from 'knex';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { makeQueries } from '../database/queries.ts';
 import { config } from '../config.ts';
 import { runImport } from '../scripts/import-legacy-history.ts';
 import { addWorkFileSchema } from './helpers/schema.ts';
+import type { RootFolder } from '../types/config.ts';
 
 /**
  * The importer reads the current track list off disk (getTrackList), so these
@@ -22,9 +21,14 @@ import { addWorkFileSchema } from './helpers/schema.ts';
  * is keyed by its work-relative path, and no file is ever read.
  */
 describe('import-legacy-history', () => {
-  let knex, dbApi, tmpRoot, oldDbPath, oldKnex, savedRootFolders;
+  let knex: Knex;
+  let dbApi: { knex: Knex } & ReturnType<typeof makeQueries>;
+  let tmpRoot: string;
+  let oldDbPath: string;
+  let oldKnex: Knex;
+  let savedRootFolders: RootFolder[];
 
-  const writeTrack = (relPath) => {
+  const writeTrack = (relPath: string) => {
     const full = path.join(tmpRoot, 'w1', relPath);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, 'x');
@@ -79,13 +83,14 @@ describe('import-legacy-history', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  const run = (opts = {}) => runImport({ oldDbPath, log: () => {}, dbApi, ...opts });
+  type ImportOverrides = Partial<NonNullable<Parameters<typeof runImport>[0]>>;
+  const run = (opts: ImportOverrides = {}) => runImport({ oldDbPath, log: () => {}, dbApi, ...opts });
 
   // Durations live on t_work_file rows now, not in t_work.memo, and the importer
   // reads them from there to tell two identically named mixes apart.
   // files_indexed_at is stamped so listWorkTracks trusts the rows as complete
   // rather than re-walking and overwriting them with NULLs.
-  const insertWork = async ({ duration = {} } = {}) => {
+  const insertWork = async ({ duration = {} }: { duration?: Record<string, number> } = {}) => {
     await knex('t_work').insert({
       id: '000001', title: 'Work One', root_folder: 'root', dir: 'w1',
       files_indexed_at: duration && Object.keys(duration).length ? new Date().toISOString() : null,
@@ -111,43 +116,42 @@ describe('import-legacy-history', () => {
 
     it('matches on the basename and seeds per-track progress', async () => {
       const summary = await run();
-      expect(summary.matchedRows).to.equal(2);
-      expect(summary.unmatchedRows).to.equal(0);
+      assert.equal(summary.matchedRows, 2);
+      assert.equal(summary.unmatchedRows, 0);
 
       const rows = await knex('t_track_progress').orderBy('track_key');
-      expect(rows.map(r => [r.track_key, r.seconds, !!r.completed]))
-        .to.deep.equal([['01 intro.webm', 59, true], ['02 main.webm', 120, false]]);
+      assert.deepEqual(rows.map(r => [r.track_key, r.seconds, !!r.completed]), [['01 intro.webm', 59, true], ['02 main.webm', 120, false]]);
     });
 
     it('rebuilds a play-history entry anchored on the last track played', async () => {
       await run();
       const row = await knex('t_play_history').first();
       const state = JSON.parse(row.state);
-      expect(state.queue).to.have.length(2);
-      expect(state.index).to.equal(1);
-      expect(state.seconds).to.equal(120);
-      expect(state.queue[1]).to.deep.equal({
+      assert.equal(state.queue.length, 2);
+      assert.equal(state.index, 1);
+      assert.equal(state.seconds, 120);
+      assert.deepEqual(state.queue[1], {
         trackId: '000001/02 main.webm', title: '02 main.webm',
         duration: 600.4, workTitle: 'Work One',
       });
       // The history list orders by updated_at; a 2023 session must not sort as today.
-      expect(row.created_at).to.equal('2023-02-09 06:04:46');
-      expect(row.updated_at).to.equal('2023-02-10 07:00:00');
+      assert.equal(row.created_at, '2023-02-09 06:04:46');
+      assert.equal(row.updated_at, '2023-02-10 07:00:00');
     });
 
     it('writes nothing on a dry run', async () => {
       const summary = await run({ dryRun: true });
-      expect(summary.progressWritten).to.equal(2);
-      expect(await knex('t_track_progress').count('* as n').first()).to.deep.equal({ n: 0 });
-      expect(await knex('t_play_history').count('* as n').first()).to.deep.equal({ n: 0 });
+      assert.equal(summary.progressWritten, 2);
+      assert.deepEqual(await knex('t_track_progress').count('* as n').first(), { n: 0 });
+      assert.deepEqual(await knex('t_play_history').count('* as n').first(), { n: 0 });
     });
 
     it('is idempotent: a second run writes nothing new', async () => {
       await run();
       const summary = await run();
-      expect(summary.progressWritten).to.equal(0);
-      expect(summary.playHistoryWritten).to.equal(0);
-      expect(summary.progressSkipped).to.equal(2);
+      assert.equal(summary.progressWritten, 0);
+      assert.equal(summary.playHistoryWritten, 0);
+      assert.equal(summary.progressSkipped, 2);
     });
 
     it('leaves a position the user has set since alone', async () => {
@@ -156,7 +160,7 @@ describe('import-legacy-history', () => {
       });
       await run();
       const row = await knex('t_track_progress').where({ track_key: '02 main.webm' }).first();
-      expect(row.seconds).to.equal(500);
+      assert.equal(row.seconds, 500);
     });
   });
 
@@ -173,10 +177,10 @@ describe('import-legacy-history', () => {
 
     await run();
     const rows = await knex('t_track_progress').orderBy('track_key');
-    expect(rows.map(r => r.track_key)).to.deep.equal(['SE/01 track.webm', 'noSE/01 track.webm']);
+    assert.deepEqual(rows.map(r => r.track_key), ['SE/01 track.webm', 'noSE/01 track.webm']);
     // The queue is folder-scoped, so it holds only the anchor's own folder.
     const state = JSON.parse((await knex('t_play_history').first()).state);
-    expect(state.queue).to.have.length(1);
+    assert.equal(state.queue.length, 1);
   });
 
   it('picks the variant whose duration matches when the duplicates differ', async () => {
@@ -192,7 +196,7 @@ describe('import-legacy-history', () => {
 
     await run();
     const rows = await knex('t_track_progress');
-    expect(rows.map(r => r.track_key)).to.deep.equal(['noSE/01 track.webm']);
+    assert.deepEqual(rows.map(r => r.track_key), ['noSE/01 track.webm']);
   });
 
   it('falls back to a unique duration match for a renamed file', async () => {
@@ -207,8 +211,8 @@ describe('import-legacy-history', () => {
     });
 
     const summary = await run();
-    expect(summary.matchedRows).to.equal(1);
-    expect((await knex('t_track_progress').first()).track_key).to.equal('Track01 the real name.webm');
+    assert.equal(summary.matchedRows, 1);
+    assert.equal((await knex('t_track_progress').first()).track_key, 'Track01 the real name.webm');
   });
 
   // A library that has not been rescanned is the normal state for someone
@@ -223,11 +227,11 @@ describe('import-legacy-history', () => {
     });
 
     const summary = await run();
-    expect(summary.progressWritten).to.equal(1);
+    assert.equal(summary.progressWritten, 1);
 
     const row = await knex('t_track_progress').first();
-    expect(row.track_key).to.equal('01 intro.webm');
-    expect(row.seconds).to.equal(59);
+    assert.equal(row.track_key, '01 intro.webm');
+    assert.equal(row.seconds, 59);
   });
 
   it('works with no memo at all, matching purely on the file name', async () => {
@@ -239,10 +243,10 @@ describe('import-legacy-history', () => {
     });
 
     const summary = await run();
-    expect(summary.matchedRows).to.equal(1);
-    expect(summary.progressWritten).to.equal(1);
+    assert.equal(summary.matchedRows, 1);
+    assert.equal(summary.progressWritten, 1);
     // No duration anywhere, so completion falls back to the legacy total_time.
-    expect(!!(await knex('t_track_progress').first()).completed).to.equal(true);
+    assert.equal(!!(await knex('t_track_progress').first()).completed, true);
   });
 
   it('gives every queue item a resolvable trackId', async () => {
@@ -258,9 +262,8 @@ describe('import-legacy-history', () => {
     // The resume-from-history path never refetches the tree, so the stored
     // queue has to carry handles the media routes can resolve on their own.
     const state = JSON.parse((await knex('t_play_history').first()).state);
-    expect(state.queue).to.have.length(2);
-    expect(state.queue.map(q => q.trackId))
-      .to.deep.equal(['000001/01 intro.webm', '000001/02 main.webm']);
+    assert.equal(state.queue.length, 2);
+    assert.deepEqual(state.queue.map((q: { trackId: string }) => q.trackId), ['000001/01 intro.webm', '000001/02 main.webm']);
   });
 
   it('skips a work that is no longer in the library', async () => {
@@ -269,14 +272,14 @@ describe('import-legacy-history', () => {
       play_time: 1, total_time: 2, created_at: '2023-02-09 06:04:46', updated_at: '2023-02-09 06:04:46',
     });
     const summary = await run();
-    expect(summary.worksMissing).to.equal(1);
+    assert.equal(summary.worksMissing, 1);
   });
 
   describe('reviews', () => {
     beforeEach(async () => {
       writeTrack('01 intro.webm');
       await insertWork({
-        duration: { '01 intro.webm': 60 }, contentHash: { '01 intro.webm': 'aaaaaaaa' },
+        duration: { '01 intro.webm': 60 },
       });
     });
 
@@ -286,8 +289,8 @@ describe('import-legacy-history', () => {
       ]);
       await run();
       const row = await knex('t_review').first();
-      expect(row.rating).to.equal(5);
-      expect(row.progress).to.equal('listened');
+      assert.equal(row.rating, 5);
+      assert.equal(row.progress, 'listened');
     });
 
     it('fills only the fields that are currently empty', async () => {
@@ -296,14 +299,14 @@ describe('import-legacy-history', () => {
 
       await run();
       const row = await knex('t_review').first();
-      expect(row.rating).to.equal(3);       // kept
-      expect(row.progress).to.equal('marked'); // filled
+      assert.equal(row.rating, 3);       // kept
+      assert.equal(row.progress, 'marked'); // filled
     });
 
     it('skips an all-empty legacy review row', async () => {
       await oldKnex('t_review').insert({ user_name: 'admin', work_id: '1', rating: 0, review_text: '', progress: null });
       const summary = await run();
-      expect(summary.reviewsWritten).to.equal(0);
+      assert.equal(summary.reviewsWritten, 0);
     });
   });
 });

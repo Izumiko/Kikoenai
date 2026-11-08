@@ -1,5 +1,3 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // getTrackProgress and applyTrackProgressSeconds are two shapes over one query
 // (trackProgressFor). They drifted once already -- the first selected updated_at
 // and the second did not, so the work page's file tree and its info panel
@@ -7,14 +5,15 @@
 
 process.env.FREEZE_CONFIG_FILE = '1';
 
-import chai from 'chai';
-const { expect } = chai;
-import knexLib from 'knex';
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import knexLib, { type Knex } from 'knex';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 import { makeQueries } from '../database/queries.ts';
 
 describe('the two track-progress projections agree', () => {
-  let knex, queries;
+  let knex: Knex;
+  let queries: ReturnType<typeof makeQueries>;
 
   beforeEach(async () => {
     knex = knexLib({ client: Client_NodeSQLite, connection: { filename: ':memory:' }, useNullAsDefault: true });
@@ -42,9 +41,9 @@ describe('the two track-progress projections agree', () => {
     await queries.applyTrackProgressSeconds('admin', rows);
 
     const fromMap = map['000001/SE/01 intro.mp3'];
-    const fromJoin = JSON.parse(rows[0].state);
-    expect(fromMap.seconds).to.equal(123.5);
-    expect(fromJoin.seconds).to.equal(fromMap.seconds);
+    const fromJoin = JSON.parse(rows[0].state!);
+    assert.equal(fromMap.seconds, 123.5);
+    assert.equal(fromJoin.seconds, fromMap.seconds);
   });
 
   // The asymmetry that existed: the map carried observedAt, the join did not.
@@ -53,14 +52,14 @@ describe('the two track-progress projections agree', () => {
     const rows = [historyRow()];
     await queries.applyTrackProgressSeconds('admin', rows);
 
-    const fromJoin = JSON.parse(rows[0].state);
-    expect(map['000001/SE/01 intro.mp3'].observedAt).to.equal('2026-09-13 06:00:00');
-    expect(fromJoin.secondsObservedAt).to.equal(map['000001/SE/01 intro.mp3'].observedAt);
+    const fromJoin = JSON.parse(rows[0].state!);
+    assert.equal(map['000001/SE/01 intro.mp3'].observedAt, '2026-09-13 06:00:00');
+    assert.equal(fromJoin.secondsObservedAt, map['000001/SE/01 intro.mp3'].observedAt);
   });
 
   it('both key on the relPath, not on a positional handle', async () => {
     const map = await queries.getTrackProgress('admin', '000001');
-    expect(Object.keys(map)).to.deep.equal(['000001/SE/01 intro.mp3']);
+    assert.deepEqual(Object.keys(map), ['000001/SE/01 intro.mp3']);
   });
 
   it('leave a history row alone when the track has no progress row', async () => {
@@ -69,9 +68,9 @@ describe('the two track-progress projections agree', () => {
       state: JSON.stringify({ queue: [{ trackId: '000002/nope.mp3' }], index: 0, seconds: 7 }),
     }];
     await queries.applyTrackProgressSeconds('admin', rows);
-    const state = JSON.parse(rows[0].state);
-    expect(state.seconds).to.equal(7);
-    expect(state).to.not.have.property('secondsObservedAt');
+    const state = JSON.parse(rows[0].state!);
+    assert.equal(state.seconds, 7);
+    assert.ok(!Object.hasOwn(state, 'secondsObservedAt'));
   });
 
   it('do not leak one work\'s position into another with the same relPath', async () => {
@@ -80,7 +79,7 @@ describe('the two track-progress projections agree', () => {
 
     const first = await queries.getTrackProgress('admin', '000001');
     const second = await queries.getTrackProgress('admin', '000002');
-    expect(first['000001/SE/01 intro.mp3'].seconds).to.equal(123.5);
-    expect(second['000002/SE/01 intro.mp3'].seconds).to.equal(999);
+    assert.equal(first['000001/SE/01 intro.mp3'].seconds, 123.5);
+    assert.equal(second['000002/SE/01 intro.mp3'].seconds, 999);
   });
 });

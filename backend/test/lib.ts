@@ -1,4 +1,3 @@
-/* eslint-disable n/no-unpublished-import */
 // Unit tests for the small local modules that replace third-party packages:
 // lib/uuid-v5.ts (uuid), lib/url-join.ts (url-join@4) and
 // lib/limit-promise.ts (limit-promise).
@@ -6,10 +5,9 @@
 // The expected hashes and URLs below are fixed values produced by the packages
 // being replaced, so a behaviour change fails here rather than in production.
 
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { createHash } from 'crypto';
-
-import chai from 'chai';
-const expect = chai.expect;
 
 import { uuidv5 } from '../lib/uuid-v5.ts';
 import urljoin from '../lib/url-join.ts';
@@ -26,46 +24,43 @@ describe('uuidv5()', () => {
   const namespace = '699d9c07-b965-4399-bafd-18a3cacf073c';
 
   it('matches the uuid package for a Japanese name', () => {
-    expect(uuidv5('かの仔', namespace)).to.equal('e82dac25-569f-54ef-9e6d-8b82fbefc808');
+    assert.equal(uuidv5('かの仔', namespace), 'e82dac25-569f-54ef-9e6d-8b82fbefc808');
   });
 
   it('matches the uuid package for an ASCII name', () => {
-    expect(uuidv5('ASMR', namespace)).to.equal('62fc73bd-43a2-510c-ab68-18b0761ef814');
+    assert.equal(uuidv5('ASMR', namespace), '62fc73bd-43a2-510c-ab68-18b0761ef814');
   });
 
   it('matches the uuid package for mixed scripts and characters', () => {
-    expect(uuidv5('Some Circle (サークル)', namespace)).to.equal('a24c0426-bced-5924-a8b8-241a06655f1d');
+    assert.equal(uuidv5('Some Circle (サークル)', namespace), 'a24c0426-bced-5924-a8b8-241a06655f1d');
   });
 });
 
 describe('md5 digest', () => {
   it('hashes ASCII input', () => {
-    expect(md5('admin')).to.equal('21232f297a57a5a743894a0e4a801fc3');
+    assert.equal(md5('admin'), '21232f297a57a5a743894a0e4a801fc3');
   });
 
   it('hashes UTF-8 input', () => {
-    expect(md5('パスワード密码')).to.equal('30ff8da3bdcf78e2d6e6577237004ce0');
+    assert.equal(md5('パスワード密码'), '30ff8da3bdcf78e2d6e6577237004ce0');
   });
 
   it('hashes input containing spaces and punctuation', () => {
-    expect(md5('p@ss word')).to.equal('b9b86dad668f10fa8e4a1c4b29d104b3');
+    assert.equal(md5('p@ss word'), 'b9b86dad668f10fa8e4a1c4b29d104b3');
   });
 });
 
 describe('urljoin()', () => {
   it('joins a base URL without a trailing slash', () => {
-    expect(urljoin('https://example.com', 'media', 'RJ123456', 'a%20b.mp3'))
-      .to.equal('https://example.com/media/RJ123456/a%20b.mp3');
+    assert.equal(urljoin('https://example.com', 'media', 'RJ123456', 'a%20b.mp3'), 'https://example.com/media/RJ123456/a%20b.mp3');
   });
 
   it('collapses duplicate slashes between parts', () => {
-    expect(urljoin('https://example.com/', '/media/', 'RJ1'))
-      .to.equal('https://example.com/media/RJ1');
+    assert.equal(urljoin('https://example.com/', '/media/', 'RJ1'), 'https://example.com/media/RJ1');
   });
 
   it('keeps a base sub-path and percent-encoded segments', () => {
-    expect(urljoin('http://x.org/base/', '%E7%94%BB', 'c.mp3'))
-      .to.equal('http://x.org/base/%E7%94%BB/c.mp3');
+    assert.equal(urljoin('http://x.org/base/', '%E7%94%BB', 'c.mp3'), 'http://x.org/base/%E7%94%BB/c.mp3');
   });
 });
 
@@ -84,8 +79,8 @@ describe('LimitPromise', () => {
     });
 
     const results = await Promise.all(tasks.map(task => limit.call(task)));
-    expect(peak).to.equal(2);
-    expect(results).to.deep.equal([0, 1, 2, 3, 4, 5]);
+    assert.equal(peak, 2);
+    assert.deepEqual(results, [0, 1, 2, 3, 4, 5]);
   });
 
   it('starts queued tasks in submission order', async () => {
@@ -103,19 +98,19 @@ describe('LimitPromise', () => {
     const promises = [0, 1, 2, 3].map(i => limit.call(task(i)));
 
     // The first `max` tasks start synchronously; the rest wait.
-    expect(started).to.deep.equal([0, 1]);
+    assert.deepEqual(started, [0, 1]);
 
     gates[0]();
     await flush();
-    expect(started).to.deep.equal([0, 1, 2]);
+    assert.deepEqual(started, [0, 1, 2]);
 
     gates[1]();
     await flush();
-    expect(started).to.deep.equal([0, 1, 2, 3]);
+    assert.deepEqual(started, [0, 1, 2, 3]);
 
     gates[2]();
     gates[3]();
-    expect(await Promise.all(promises)).to.deep.equal([0, 1, 2, 3]);
+    assert.deepEqual(await Promise.all(promises), [0, 1, 2, 3]);
   });
 
   it('keeps running queued tasks after one rejects', async () => {
@@ -135,8 +130,8 @@ describe('LimitPromise', () => {
       return 'ok';
     });
 
-    expect(await failing).to.equal('boom');
-    expect(await succeeding).to.equal('ok');
-    expect(order).to.deep.equal(['fails', 'runs']);
+    assert.equal(await failing, 'boom');
+    assert.equal(await succeeding, 'ok');
+    assert.deepEqual(order, ['fails', 'runs']);
   });
 });

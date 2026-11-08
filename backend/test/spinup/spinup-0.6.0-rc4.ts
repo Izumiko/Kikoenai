@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import { knex } from '../../database/db.ts';
 
 const createOldSchema = () => knex.schema
@@ -34,7 +32,7 @@ const createOldSchema = () => knex.schema
   .createTable('t_va', (table) => {
     table.string('id'); // UUID v5, 基于name生成的固定值
     table.string('name').notNullable(); // VARCHAR 类型 [声优名称]
-    table.primary('id');
+    table.primary(['id']);
   })
   .createTable('r_tag_work', (table) => {
     table.integer('tag_id');

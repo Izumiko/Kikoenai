@@ -1,30 +1,55 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 process.env.FREEZE_CONFIG_FILE = '1';
 
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { makeQueries } from '../database/queries.ts';
 import { formatSearchTerm } from '../database/search-query.ts';
 import { config } from '../config.ts';
-import knex from 'knex';
+import knex, { type Knex } from 'knex';
 import * as knexfile from '../database/knexfile.ts';
 import Client_NodeSQLite from '../database/node-sqlite-client.ts';
-import chai from 'chai';
-
-const expect = chai.expect;
 
 const WARMUP = 5;
 const ITERATIONS = parseInt(process.env.BENCH_ITERATIONS || '50', 10);
 const PAGE_SIZE = config.pageSize || 12;
 
-const results = [];
+interface BenchRow {
+  query: string;
+  n: number;
+  minMs: number;
+  avgMs: number;
+  medianMs: number;
+  p95Ms: number;
+  maxMs: number;
+}
 
-const bench = async (label, fn) => {
+// Real ids sampled from the development database; each benchmark reads the
+// ones it needs. Null means the sample could not be taken.
+interface Sample {
+  username: string;
+  workId?: string | null;
+  numericId?: string | null;
+  circleName?: string | null;
+  tagName?: string | null;
+  vaName?: string | null;
+  illustratorName?: string | null;
+  scriptWriterName?: string | null;
+  seriesName?: string | null;
+  keyword?: string | null;
+  reviewUser?: string | null;
+  historyUser?: string | null;
+}
+
+const results: BenchRow[] = [];
+const sample: Sample = { username: 'admin' };
+
+const bench = async (label: string, fn: () => unknown): Promise<BenchRow> => {
   for (let i = 0; i < WARMUP; i += 1) {
     await fn();
   }
-  const timings = [];
+  const timings: number[] = [];
   for (let i = 0; i < ITERATIONS; i += 1) {
     const start = process.hrtime.bigint();
     await fn();
@@ -49,20 +74,17 @@ const bench = async (label, fn) => {
   return row;
 };
 
-describe('DB query benchmark', function () {
-  // Each case runs WARMUP + ITERATIONS query executions; scale timeout with
-  // iteration count and give plenty of headroom.
-  this.timeout(Math.max(30000, (WARMUP + ITERATIONS) * 1000));
+// The database is opened in the `before` hook, so the id samples it fills in
+// are read by the benchmarks below it. A missing or empty database skips every
+// case with the reason instead of failing the run.
+const dbPath = process.env.BENCH_DB || path.join(config.databaseFolderDir, 'db.sqlite3');
+let skipReason = fs.existsSync(dbPath) ? '' : `Dev DB (${dbPath}) not found — skipping benchmark`;
+let myKnex: Knex;
+let Q: ReturnType<typeof makeQueries>;
 
-  let myKnex = null;
-  let Q = null;
-
-  before(async function () {
-    const dbPath = process.env.BENCH_DB || path.join(config.databaseFolderDir, 'db.sqlite3');
-    if (!fs.existsSync(dbPath)) {
-      this.skip(`Dev DB (${dbPath}) not found — skipping benchmark`);
-      return;
-    }
+describe('DB query benchmark', { timeout: Math.max(30000, (WARMUP + ITERATIONS) * 1000) }, () => {
+  before(async () => {
+    if (skipReason) return;
 
     if (process.env.BENCH_DB) {
       myKnex = knex({ client: Client_NodeSQLite, useNullAsDefault: true, connection: { filename: process.env.BENCH_DB } });
@@ -74,18 +96,16 @@ describe('DB query benchmark', function () {
     // Check t_work has data
     const workCount = await myKnex('t_work').count('id as count').first();
     if (!workCount || workCount.count === 0) {
-      this.skip('t_work is empty — skipping benchmark');
+      skipReason = 't_work is empty — skipping benchmark';
       return;
     }
 
     // Sample real IDs from the DB
-    this.sample = {};
-
     const workRow = await myKnex('t_work').select('id').first();
-    this.sample.workId = workRow ? workRow.id : null;
+    sample.workId = workRow ? workRow.id : null;
 
     // Label filters resolve by name, so that is what the benchmarks need.
-    const labelName = async (relTable, key, nameTable) => {
+    const labelName = async (relTable: string, key: string, nameTable: string) => {
       const rel = await myKnex(relTable).select(`${key} as id`).first();
       if (!rel) return null;
       const row = await myKnex(nameTable).select('name').where('id', rel.id).first();
@@ -95,35 +115,33 @@ describe('DB query benchmark', function () {
     const circleRow = await myKnex('t_work')
       .join('t_circle', 't_circle.id', 't_work.circle_id')
       .select('t_circle.name').whereNotNull('circle_id').first();
-    this.sample.circleName = circleRow ? circleRow.name : null;
+    sample.circleName = circleRow ? circleRow.name : null;
 
-    this.sample.tagName = await labelName('r_tag_work', 'tag_id', 't_tag');
-    this.sample.vaName = await labelName('r_va_work', 'va_id', 't_va');
-    this.sample.illustratorName = await labelName('r_illustrator_work', 'illustrator_id', 't_illustrator');
-    this.sample.scriptWriterName = await labelName('r_script_writer_work', 'script_writer_id', 't_script_writer');
-    this.sample.seriesName = await labelName('r_series_work', 'series_id', 't_series');
+    sample.tagName = await labelName('r_tag_work', 'tag_id', 't_tag');
+    sample.vaName = await labelName('r_va_work', 'va_id', 't_va');
+    sample.illustratorName = await labelName('r_illustrator_work', 'illustrator_id', 't_illustrator');
+    sample.scriptWriterName = await labelName('r_script_writer_work', 'script_writer_id', 't_script_writer');
+    sample.seriesName = await labelName('r_series_work', 'series_id', 't_series');
 
     // Numeric RJ id for keyword search
-    if (this.sample.workId) {
-      this.sample.numericId = String(this.sample.workId).replace(/\D/g, '');
+    if (sample.workId) {
+      sample.numericId = String(sample.workId).replace(/\D/g, '');
     }
 
     // Text keyword from an existing title
     const titleRow = await myKnex('t_work').select('title').whereNotNull('title').first();
-    this.sample.keyword = (titleRow && titleRow.title) ? titleRow.title.slice(0, 12) : null;
+    sample.keyword = (titleRow && titleRow.title) ? titleRow.title.slice(0, 12) : null;
 
     // Username with reviews
     const reviewUserRow = await myKnex('t_review').select('user_name').distinct().first();
-    this.sample.reviewUser = reviewUserRow ? reviewUserRow.user_name : null;
+    sample.reviewUser = reviewUserRow ? reviewUserRow.user_name : null;
 
     // Username with play history
     const historyUserRow = await myKnex('t_play_history').select('user_name').distinct().first();
-    this.sample.historyUser = historyUserRow ? historyUserRow.user_name : null;
-
-    this.sample.username = 'admin';
+    sample.historyUser = historyUserRow ? historyUserRow.user_name : null;
   });
 
-  after(async function () {
+  after(async () => {
     if (results.length) {
       console.table(results);
     }
@@ -131,130 +149,149 @@ describe('DB query benchmark', function () {
       try {
         await myKnex.destroy();
       } catch (err) {
-        console.warn('benchmark knex destroy warning:', err.message);
+        console.warn('benchmark knex destroy warning:', (err as Error).message);
       }
     }
   });
 
-  it('getWorksBy default (all works)', async function () {
+  it('getWorksBy default (all works)', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     // Omit limit/offset to get all works
-    const row = await bench('getWorksBy default', () => Q.getWorksBy({ username: this.sample.username }));
-    expect(row).to.exist;
+    const row = await bench('getWorksBy default', () => Q.getWorksBy({ username: sample.username }));
+    assert.ok(row);
   });
 
-  it('label filter circle', async function () {
-    if (!this.sample.circleName) { this.skip('no circle name'); return; }
-    const keyword = formatSearchTerm({ field: 'circle', value: this.sample.circleName, exact: true });
-    const row = await bench('filter circle', () => Q.getWorksByFilter({ filter: keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('label filter circle', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.circleName) { t.skip('no circle name'); return; }
+    const keyword = formatSearchTerm({ field: 'circle', value: sample.circleName, exact: true });
+    const row = await bench('filter circle', () => Q.getWorksByFilter({ filter: keyword, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('label filter tag', async function () {
-    if (!this.sample.tagName) { this.skip('no tag name'); return; }
-    const keyword = formatSearchTerm({ field: 'tag', value: this.sample.tagName, exact: true });
-    const row = await bench('filter tag', () => Q.getWorksByFilter({ filter: keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('label filter tag', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.tagName) { t.skip('no tag name'); return; }
+    const keyword = formatSearchTerm({ field: 'tag', value: sample.tagName, exact: true });
+    const row = await bench('filter tag', () => Q.getWorksByFilter({ filter: keyword, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('label filter va', async function () {
-    if (!this.sample.vaName) { this.skip('no va name'); return; }
-    const keyword = formatSearchTerm({ field: 'va', value: this.sample.vaName, exact: true });
-    const row = await bench('filter va', () => Q.getWorksByFilter({ filter: keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('label filter va', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.vaName) { t.skip('no va name'); return; }
+    const keyword = formatSearchTerm({ field: 'va', value: sample.vaName, exact: true });
+    const row = await bench('filter va', () => Q.getWorksByFilter({ filter: keyword, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('label filter illustrator', async function () {
-    if (!this.sample.illustratorName) { this.skip('no illustrator name'); return; }
-    const keyword = formatSearchTerm({ field: 'illustrator', value: this.sample.illustratorName, exact: true });
-    const row = await bench('filter illustrator', () => Q.getWorksByFilter({ filter: keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('label filter illustrator', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.illustratorName) { t.skip('no illustrator name'); return; }
+    const keyword = formatSearchTerm({ field: 'illustrator', value: sample.illustratorName, exact: true });
+    const row = await bench('filter illustrator', () => Q.getWorksByFilter({ filter: keyword, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('label filter script_writer', async function () {
-    if (!this.sample.scriptWriterName) { this.skip('no script_writer name'); return; }
-    const keyword = formatSearchTerm({ field: 'script_writer', value: this.sample.scriptWriterName, exact: true });
-    const row = await bench('filter script_writer', () => Q.getWorksByFilter({ filter: keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('label filter script_writer', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.scriptWriterName) { t.skip('no script_writer name'); return; }
+    const keyword = formatSearchTerm({ field: 'script_writer', value: sample.scriptWriterName, exact: true });
+    const row = await bench('filter script_writer', () => Q.getWorksByFilter({ filter: keyword, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('label filter series', async function () {
-    if (!this.sample.seriesName) { this.skip('no series name'); return; }
-    const keyword = formatSearchTerm({ field: 'series', value: this.sample.seriesName, exact: true });
-    const row = await bench('filter series', () => Q.getWorksByFilter({ filter: keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('label filter series', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.seriesName) { t.skip('no series name'); return; }
+    const keyword = formatSearchTerm({ field: 'series', value: sample.seriesName, exact: true });
+    const row = await bench('filter series', () => Q.getWorksByFilter({ filter: keyword, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('realistic /api/works (paged + count)', async function () {
+  it('realistic /api/works (paged + count)', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('realistic /api/works', () => Q.getWorksBy({
-      username: this.sample.username, nsfw: 0,
+      username: sample.username, nsfw: 0,
       order: 'release', sort: 'desc',
       limit: PAGE_SIZE, offset: 48,
     }));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getWorksByFilter numeric id', async function () {
-    if (!this.sample.numericId) { this.skip('no numeric id'); return; }
-    const row = await bench('getWorksByFilter numeric', () => Q.getWorksByFilter({ filter: `RJ${this.sample.numericId}`, username: this.sample.username }));
-    expect(row).to.exist;
+  it('getWorksByFilter numeric id', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.numericId) { t.skip('no numeric id'); return; }
+    const row = await bench('getWorksByFilter numeric', () => Q.getWorksByFilter({ filter: `RJ${sample.numericId}`, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('getWorksByFilter text keyword', async function () {
-    if (!this.sample.keyword) { this.skip('no keyword'); return; }
-    const row = await bench('getWorksByFilter text', () => Q.getWorksByFilter({ filter: this.sample.keyword, username: this.sample.username }));
-    expect(row).to.exist;
+  it('getWorksByFilter text keyword', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.keyword) { t.skip('no keyword'); return; }
+    const row = await bench('getWorksByFilter text', () => Q.getWorksByFilter({ filter: sample.keyword!, username: sample.username }));
+    assert.ok(row);
   });
 
-  it('getWorkMetadata', async function () {
-    if (!this.sample.workId) { this.skip('no work id'); return; }
-    const row = await bench('getWorkMetadata', () => Q.getWorkMetadata(this.sample.workId, this.sample.username));
-    expect(row).to.exist;
+  it('getWorkMetadata', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.workId) { t.skip('no work id'); return; }
+    const row = await bench('getWorkMetadata', () => Q.getWorkMetadata(sample.workId!, sample.username));
+    assert.ok(row);
   });
 
-  it('getLabels circle', async function () {
+  it('getLabels circle', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('getLabels circle', () => Q.getLabels('circle'));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getLabels tag', async function () {
+  it('getLabels tag', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('getLabels tag', () => Q.getLabels('tag'));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getLabels va', async function () {
+  it('getLabels va', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('getLabels va', () => Q.getLabels('va'));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getLabels illustrator', async function () {
+  it('getLabels illustrator', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('getLabels illustrator', () => Q.getLabels('illustrator'));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getLabels script_writer', async function () {
+  it('getLabels script_writer', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('getLabels script_writer', () => Q.getLabels('script_writer'));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getLabels series', async function () {
+  it('getLabels series', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
     const row = await bench('getLabels series', () => Q.getLabels('series'));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getWorksWithReviews (paged)', async function () {
-    if (!this.sample.reviewUser) { this.skip('no reviewing user'); return; }
+  it('getWorksWithReviews (paged)', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.reviewUser) { t.skip('no reviewing user'); return; }
     const row = await bench('getWorksWithReviews', () => Q.getWorksWithReviews({
-      username: this.sample.reviewUser, limit: PAGE_SIZE, offset: 0,
+      username: sample.reviewUser!, limit: PAGE_SIZE, offset: 0,
       orderBy: 'release', sortOption: 'desc',
     }));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 
-  it('getPlayHistory (paged)', async function () {
-    if (!this.sample.historyUser) { this.skip('no history user'); return; }
+  it('getPlayHistory (paged)', async (t) => {
+    if (skipReason) { t.skip(skipReason); return; }
+    if (!sample.historyUser) { t.skip('no history user'); return; }
     const row = await bench('getPlayHistory', () => Q.getPlayHistory({
-      username: this.sample.historyUser, limit: PAGE_SIZE, offset: 0, sortOption: 'desc',
+      username: sample.historyUser!, limit: PAGE_SIZE, offset: 0, sortOption: 'desc',
     }));
-    expect(row).to.exist;
+    assert.ok(row);
   });
 });

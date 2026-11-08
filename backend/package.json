@@ -22,8 +22,8 @@
     "import:legacy-history": "node --trace-warnings ./scripts/import-legacy-history.ts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "npm run lint && npm run typecheck && cross-env NODE_ENV=test mocha --extension ts 'test/**/*.ts' --ignore test/benchmark.ts --ignore 'test/{helpers,spinup,teardown}/**'",
-    "bench": "cross-env NODE_ENV=test mocha --extension ts test/benchmark.ts"
+    "test": "npm run lint && npm run typecheck && node --import ./test/setup-env.ts --test --test-concurrency=1 test/backfill-progress.ts test/base-path.ts test/data-root.ts test/description-html.ts test/edit-metadata.ts test/history-seconds.ts test/import-legacy-history.ts test/lib.ts test/lyric-discovery.ts test/migration-names.ts test/migration..ts test/node-sqlite-client.ts test/progress-projections.ts test/scan-logging.ts test/search-query.ts test/track-identity.ts test/track-progress-freshness.ts test/track-titles.ts test/transcode-filename.ts test/transcription.ts test/urljoin.ts test/work-file-listing.ts test/work-files.ts test/work-id.ts test/work-images.ts",
+    "bench": "node --import ./test/setup-env.ts test/benchmark.ts"
   },
   "bin": "app.ts",
   "pkg": {
@@ -64,20 +64,15 @@
     "undici": "^7.29.0"
   },
   "devDependencies": {
-    "@types/chai": "^4.3.20",
     "@types/compression": "^1.8.1",
     "@types/connect-history-api-fallback": "^1.5.4",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
-    "@types/mocha": "^10.0.10",
     "@types/node": "^26.6.6",
     "@types/serve-index": "^1.9.4",
-    "chai": "^4.3.4",
-    "chai-string": "^1.5.0",
     "cross-env": "^10.1.0",
     "eslint": "^10.14.0",
     "eslint-plugin-n": "^18.5.0",
-    "mocha": "^12.0.3",
     "serve-index": "^1.9.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1"

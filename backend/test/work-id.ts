@@ -1,14 +1,12 @@
-// @ts-nocheck
-/* eslint-disable n/no-unpublished-import */
 // Canonical Fanza work ids (d215444) and the boundaries that still speak d_215444
 
 process.env.FREEZE_CONFIG_FILE = '1';
 
-import chai from 'chai';
-const expect = chai.expect;
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
 import { existsSync, unlinkSync, mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
-import knexLib from 'knex';
+import knexLib, { type Knex } from 'knex';
 
 import { isFanzaId, isBooksId, canonicalizeWorkId, fanzaCid, workno } from '../work-id.ts';
 import { coverFileName, workImageFileName, getFolderList } from '../filesystem/utils.ts';
@@ -17,63 +15,63 @@ import Client_NodeSQLite from '../database/node-sqlite-client.ts';
 
 describe('work-id helpers', function () {
   it('recognises both Fanza spellings, and no DLsite id', function () {
-    expect(isFanzaId('d215444')).to.be.true;
-    expect(isFanzaId('d_215444')).to.be.true;
-    expect(isFanzaId('123456')).to.be.false;
-    expect(isFanzaId('01134567')).to.be.false;
+    assert.equal(isFanzaId('d215444'), true);
+    assert.equal(isFanzaId('d_215444'), true);
+    assert.equal(isFanzaId('123456'), false);
+    assert.equal(isFanzaId('01134567'), false);
   });
 
   it('canonicalizes to the underscore-free form', function () {
-    expect(canonicalizeWorkId('d_215444')).to.equal('d215444');
-    expect(canonicalizeWorkId('d215444')).to.equal('d215444');
-    expect(canonicalizeWorkId('01134567')).to.equal('01134567');
+    assert.equal(canonicalizeWorkId('d_215444'), 'd215444');
+    assert.equal(canonicalizeWorkId('d215444'), 'd215444');
+    assert.equal(canonicalizeWorkId('01134567'), '01134567');
   });
 
   it('rebuilds Fanza\'s own cid for DMM', function () {
-    expect(fanzaCid('d215444')).to.equal('d_215444');
-    expect(fanzaCid('d_215444')).to.equal('d_215444');
-    expect(fanzaCid('123456')).to.equal('123456');
+    assert.equal(fanzaCid('d215444'), 'd_215444');
+    assert.equal(fanzaCid('d_215444'), 'd_215444');
+    assert.equal(fanzaCid('123456'), '123456');
   });
 
   it('keeps on-disk file names in the underscore form', function () {
     // Renaming everyone's cached covers is not worth it; the file name is an
     // external format here, like the DMM URL.
-    expect(coverFileName('d215444', 'main')).to.equal('d_215444_img_main.jpg');
-    expect(coverFileName('d_215444', 'main')).to.equal('d_215444_img_main.jpg');
-    expect(coverFileName('123456', 'main')).to.equal('RJ123456_img_main.jpg');
-    expect(workImageFileName('d215444', 'smp', 2)).to.equal('d_215444_img_smp2.jpg');
+    assert.equal(coverFileName('d215444', 'main'), 'd_215444_img_main.jpg');
+    assert.equal(coverFileName('d_215444', 'main'), 'd_215444_img_main.jpg');
+    assert.equal(coverFileName('123456', 'main'), 'RJ123456_img_main.jpg');
+    assert.equal(workImageFileName('d215444', 'smp', 2), 'd_215444_img_smp2.jpg');
   });
 
   it('keeps the BJ prefix, which is not implicit the way RJ is', function () {
-    expect(isBooksId('BJ635795')).to.be.true;
-    expect(isBooksId('bj635795')).to.be.true;
-    expect(isBooksId('635795')).to.be.false;
-    expect(isBooksId('d215444')).to.be.false;
-    expect(canonicalizeWorkId('bj635795')).to.equal('BJ635795');
+    assert.equal(isBooksId('BJ635795'), true);
+    assert.equal(isBooksId('bj635795'), true);
+    assert.equal(isBooksId('635795'), false);
+    assert.equal(isBooksId('d215444'), false);
+    assert.equal(canonicalizeWorkId('bj635795'), 'BJ635795');
     // Without the prefix these two works would share a primary key.
-    expect(canonicalizeWorkId('BJ635795')).to.not.equal(canonicalizeWorkId('635795'));
-    expect(coverFileName('BJ635795', 'main')).to.equal('BJ635795_img_main.jpg');
-    expect(workImageFileName('BJ635795', 'smp', 2)).to.equal('BJ635795_img_smp2.jpg');
+    assert.notEqual(canonicalizeWorkId('BJ635795'), canonicalizeWorkId('635795'));
+    assert.equal(coverFileName('BJ635795', 'main'), 'BJ635795_img_main.jpg');
+    assert.equal(workImageFileName('BJ635795', 'smp', 2), 'BJ635795_img_smp2.jpg');
   });
 
   it('spells every work code the way its store does', function () {
-    expect(workno('635795')).to.equal('RJ635795');
-    expect(workno('01134567')).to.equal('RJ01134567');
-    expect(workno('BJ635795')).to.equal('BJ635795');
-    expect(workno('d215444')).to.equal('d_215444');
+    assert.equal(workno('635795'), 'RJ635795');
+    assert.equal(workno('01134567'), 'RJ01134567');
+    assert.equal(workno('BJ635795'), 'BJ635795');
+    assert.equal(workno('d215444'), 'd_215444');
   });
 });
 
 describe('getFolderList() work-code detection', function () {
-  let root;
+  let root: string;
 
   const scan = async () => {
-    const found = [];
+    const found: string[] = [];
     for await (const folder of getFolderList({ name: 'test', path: root })) found.push(folder.id);
     return found.sort();
   };
 
-  before('Lay out a fake library', function () {
+  before(() => {
     root = mkdtempSync(join(import.meta.dirname, 'folders-'));
     for (const name of [
       'RJ123456 タイトル',      // DLsite
@@ -92,21 +90,17 @@ describe('getFolderList() work-code detection', function () {
 
   it('reads both Fanza spellings and yields the canonical id', async function () {
     // Sound_CD1 is not a work folder, so it is recursed into (and is empty).
-    expect(await scan()).to.deep.equal(
-      ['123456', 'BJ01622225', 'BJ635795', 'd111222', 'd215444', 'd987654'].sort()
-    );
+    assert.deepEqual(await scan(), ['123456', 'BJ01622225', 'BJ635795', 'd111222', 'd215444', 'd987654'].sort());
   });
 });
 
-describe('migration 20260828000000 (d_215444 → d215444)', function () {
-  this.timeout(10000);
-
+describe('migration 20260828000000 (d_215444 → d215444)', { timeout: 10000 }, () => {
   const TEST_DB = join(import.meta.dirname, 'db-workid-test.sqlite3');
-  let knex;
+  let knex: Knex;
 
   const ids = () => knex('t_work').pluck('id').orderBy('id');
 
-  before('Build a two-work library with a pre-migration Fanza id', async function () {
+  before(async () => {
     if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
     knex = knexLib({
       client: Client_NodeSQLite, useNullAsDefault: true, connection: { filename: TEST_DB },
@@ -126,15 +120,15 @@ describe('migration 20260828000000 (d_215444 → d215444)', function () {
 
   it('rewrites every work-id column, leaving DLsite ids alone', async function () {
     await migration.up(knex);
-    expect(await ids()).to.deep.equal(['123456', 'd215444']);
-    expect(await knex('r_tag_work').pluck('work_id').orderBy('work_id')).to.deep.equal(['123456', 'd215444']);
-    expect(await knex('t_review').pluck('work_id')).to.deep.equal(['d215444']);
+    assert.deepEqual(await ids(), ['123456', 'd215444']);
+    assert.deepEqual(await knex('r_tag_work').pluck('work_id').orderBy('work_id'), ['123456', 'd215444']);
+    assert.deepEqual(await knex('t_review').pluck('work_id'), ['d215444']);
   });
 
   it('reverses cleanly', async function () {
     await migration.down(knex);
-    expect(await ids()).to.deep.equal(['123456', 'd_215444']);
-    expect(await knex('t_review').pluck('work_id')).to.deep.equal(['d_215444']);
+    assert.deepEqual(await ids(), ['123456', 'd_215444']);
+    assert.deepEqual(await knex('t_review').pluck('work_id'), ['d_215444']);
     await migration.up(knex); // leave it migrated
   });
 });
