@@ -22,11 +22,19 @@ const outDir = path.join(appDir, 'build');
 
 // Destination basenames come from the source basenames: filesystem/scanner.ts
 // becomes build/scanner.mjs, so socket.ts can fork `<appDir>/scanner.mjs`.
+//
+// The scanner trio is forked (socket.ts) and the CLI scripts are the documented
+// one-shot maintenance commands (`npm run backfill:progress`, `npm run
+// import:legacy-history`). They belong in the bundle because build/ ships
+// WITHOUT node_modules and without the .ts sources, so these are the only way
+// those commands exist in a container or the Windows zip.
 const ENTRY_POINTS = [
   'app.ts',
   'filesystem/scanner.ts',
   'filesystem/updater.ts',
   'filesystem/workFileScanner.ts',
+  'scripts/backfill-progress.ts',
+  'scripts/import-legacy-history.ts',
 ];
 
 // knex requires() a dialect driver only for dialects this app never selects:
@@ -75,6 +83,9 @@ const options: BuildOptions = {
   banner: { js: REQUIRE_BANNER },
   minify: !debug,
   sourcemap: debug,
+  // The build result's `outputs` are what stale cleanup compares against, so a
+  // chunk that kept its hash is never deleted as if it were a leftover.
+  metafile: true,
   logLevel: 'info',
 };
 
@@ -93,31 +104,52 @@ const copyIntoBuild = (from: string, to: string, label: string): void => {
   fs.cpSync(from, to, { recursive: true });
 };
 
+/** A file this script owns: an entry point, a shared chunk, or a source map. */
+const isBundleArtifact = (name: string): boolean => name.endsWith('.mjs') || name.endsWith('.map');
+
 /**
- * Drop artifacts left by an earlier build: chunks (their names carry a content
- * hash, so a rebuild produces new ones) and source maps (a --debug build leaves
- * them behind for a later minified build). Nothing else is touched: with
- * KIKO_DATA_DIR unset, a running deployment's data (config/, sqlite/, covers/,
- * ...) lives in this directory too and must survive a rebuild.
+ * Artifacts an earlier build left in outDir.
+ *
+ * Collected BEFORE the build and removed only AFTER it succeeds: a failed build
+ * must not delete the chunks the existing app.mjs still imports. Directories
+ * are skipped on purpose -- `dist/` and `static/` are copies, the deployment
+ * may hold data (config/, sqlite/, ...) when KIKO_DATA_DIR is unset, and
+ * fs.rmSync without `recursive` throws on a directory.
  */
-const removeStaleArtifacts = (): void => {
-  if (!fs.existsSync(outDir)) return;
-  for (const file of fs.readdirSync(outDir)) {
-    if (file.startsWith('chunk-') || file.endsWith('.map')) {
-      fs.rmSync(path.join(outDir, file), { force: true });
-    }
+const collectPreviousArtifacts = (): string[] => {
+  if (!fs.existsSync(outDir)) return [];
+  return fs.readdirSync(outDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && isBundleArtifact(entry.name))
+    .map((entry) => entry.name);
+};
+
+/**
+ * Remove the artifacts this build did not emit: chunks whose hash changed,
+ * source maps a later minified build does not write, and entry points that are
+ * no longer in ENTRY_POINTS (their `<name>.mjs` would otherwise linger in the
+ * deployment forever).
+ */
+const removeStaleArtifacts = (previous: string[], emitted: ReadonlySet<string>): void => {
+  for (const name of previous) {
+    if (emitted.has(name)) continue;
+    fs.rmSync(path.join(outDir, name), { force: true });
   }
 };
 
 const main = async (): Promise<void> => {
-  removeStaleArtifacts();
-  await build(options);
+  const previousArtifacts = collectPreviousArtifacts();
+  const result = await build(options);
+  const emitted = new Set(Object.keys(result.metafile?.outputs ?? {}).map((output) => path.basename(output)));
+  removeStaleArtifacts(previousArtifacts, emitted);
   // The frontend builds into backend/dist (frontend/quasar.config.js), so there
   // is nothing to rebuild here -- only to carry into the deployment directory.
   copyIntoBuild(path.join(appDir, 'dist'), path.join(outDir, 'dist'), 'Frontend build (dist/)');
   copyIntoBuild(path.join(appDir, 'static'), path.join(outDir, 'static'), 'Static assets (static/)');
 
-  const bundles = fs.readdirSync(outDir).filter((file) => file.endsWith('.mjs')).sort();
+  const bundles = ENTRY_POINTS
+    .map((entry) => `${path.basename(entry, '.ts')}.mjs`)
+    .filter((name) => fs.existsSync(path.join(outDir, name)))
+    .sort();
   console.log(`Bundled ${ENTRY_POINTS.length} entry points${debug ? ' (debug: unminified, with source maps)' : ''}.`);
   console.log(`Output: ${outDir}`);
   console.log(`  ${bundles.join('\n  ')}`);

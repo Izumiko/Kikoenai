@@ -24,7 +24,7 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, fork, spawn } from 'node:child_process';
+import { execFileSync, fork, spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -39,7 +39,16 @@ const BACKEND_DIR = path.join(import.meta.dirname, '..');
 const BUILD_DIR = path.join(BACKEND_DIR, 'build');
 
 /** Entry points the bundle must contain, flat in build/ (see scripts/build.ts). */
-const ENTRY_POINTS = ['app.mjs', 'scanner.mjs', 'updater.mjs', 'workFileScanner.mjs'];
+const ENTRY_POINTS = [
+  'app.mjs',
+  'scanner.mjs',
+  'updater.mjs',
+  'workFileScanner.mjs',
+  // The documented maintenance commands: build/ ships without node_modules or
+  // .ts sources, so these are the only copies a deployment has.
+  'backfill-progress.mjs',
+  'import-legacy-history.mjs',
+];
 
 /**
  * Runtime state a previously booted build/ directory would already hold. The
@@ -143,6 +152,22 @@ const waitForHealth = async (url: string, server: BootedServer): Promise<void> =
     await delay(200);
   }
   throw new Error(`Timed out waiting for ${url} (last status: ${lastStatus}).\n--- output ---\n${server.output()}`);
+};
+
+interface CliResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Run an entry point the way an operator would: `node <script>` in the deployment. */
+const runInDeployment = (deploymentDir: string, args: string[]): CliResult => {
+  const result = spawnSync(process.execPath, args, {
+    cwd: deploymentDir,
+    env: deploymentEnv(0),
+    encoding: 'utf8',
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 };
 
 /** Fork a bundled scanner script the way socket.ts does, and report its exit. */
@@ -272,6 +297,22 @@ describe('bundled backend', () => {
       ? fs.readdirSync(path.join(deployment, 'logs'))
       : [];
     assert.equal(logs.some((file) => file.endsWith('.log')), true, `expected a scan log, got ${logs.join(', ')}`);
+  });
+
+  // Both scripts gate their main on `import.meta.main` (see their CLI sections).
+  // A bundle that moved that code into a shared chunk would leave the gate
+  // false: the process would start, do nothing and exit 0. The output is what
+  // tells the two apart.
+  it('runs the bundled maintenance CLIs', () => {
+    const backfill = runInDeployment(deployment, ['backfill-progress.mjs', '--dry-run']);
+    assert.equal(backfill.status, 0, `backfill-progress.mjs --dry-run should exit 0.\n--- stdout ---\n${backfill.stdout}\n--- stderr ---\n${backfill.stderr}`);
+    assert.match(backfill.stdout, /\[backfill-progress\]/, 'the CLI should have done something, not silently exited');
+
+    // With no argument it can only print its usage and exit 1; a false
+    // import.meta.main would exit 0 with no output instead.
+    const importer = runInDeployment(deployment, ['import-legacy-history.mjs']);
+    assert.equal(importer.status, 1, `import-legacy-history.mjs without an argument should exit 1.\n--- stdout ---\n${importer.stdout}\n--- stderr ---\n${importer.stderr}`);
+    assert.match(importer.stderr, /Usage: node \.\/scripts\/import-legacy-history/, 'the usage message should be printed');
   });
 
   it('keeps the upstream .js migration names in knex_migrations', () => {
