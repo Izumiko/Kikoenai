@@ -1,10 +1,22 @@
-// @ts-nocheck
-
-import originAxios from 'axios';
+import originAxios, { isAxiosError } from 'axios';
+import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { httpsOverHttp, httpOverHttp } from 'tunnel-agent';
 
 import { config } from '../config.ts';
 const Config = config;
+
+/** Per-request retry overrides; `retryGet` fills the rest from config.ts. */
+export interface RetryPolicy {
+  limit?: number;
+  retryCount?: number;
+  retryDelay?: number;
+  timeout?: number;
+}
+
+/** A request config that also carries the retry policy. */
+export interface RetryOptions extends AxiosRequestConfig {
+  retry?: RetryPolicy;
+}
 
 const axios = originAxios.create();
 // axios.defaults.timeout = Config.timeout || 2000; // 请求超时的毫秒数
@@ -16,7 +28,7 @@ const axios = originAxios.create();
 // });
 
 // 代理设置
-const TUNNEL_OPTIONS = {
+const TUNNEL_OPTIONS: { proxy: { host?: string; port: number } } = {
   proxy: {
     port: Config.httpProxyPort
   }
@@ -32,7 +44,7 @@ axios.interceptors.request.use(function (config) {
     config.httpAgent = httpOverHttp(TUNNEL_OPTIONS);
     config.httpsAgent = httpsOverHttp(TUNNEL_OPTIONS);
   }
-  
+
   return config;
 });
 
@@ -70,7 +82,7 @@ axios.interceptors.request.use(function (config) {
 
 
 
-const retryGet = async (url, config) => {
+const retryGet = async <T = unknown>(url: string, config: RetryOptions): Promise<AxiosResponse<T>> => {
   let defaultLimit = Config.retry || 5;
   let defaultRetryDelay = Config.retryDelay || 2000;
   let defaultTimeout = 10000;
@@ -83,40 +95,41 @@ const retryGet = async (url, config) => {
     defaultTimeout = Config.fanzaTimeout || defaultLimit;
   }
 
-  config.retry = {
-    limit: (config.retry && config.retry.limit) ? config.retry.limit : defaultLimit, // 5
-    retryCount: (config.retry && config.retry.retryCount) ? config.retry.retryCount : 0,
-    retryDelay: (config.retry && config.retry.retryDelay) ? config.retry.retryDelay : defaultRetryDelay, //2000,
-    timeout: (config.retry && config.retry.timeout) ? config.retry.timeout : defaultTimeout
+  const retry = {
+    limit: config.retry?.limit || defaultLimit, // 5
+    retryCount: config.retry?.retryCount || 0,
+    retryDelay: config.retry?.retryDelay || defaultRetryDelay, //2000,
+    timeout: config.retry?.timeout || defaultTimeout
   };
+  config.retry = retry;
 
   const abort = originAxios.CancelToken.source();
   const timeoutId = setTimeout(
-    () => abort.cancel(`Timeout of ${config.retry.timeout}ms.`),
-    config.retry.timeout
+    () => abort.cancel(`Timeout of ${retry.timeout}ms.`),
+    retry.timeout
   );
   config.cancelToken = abort.token;
 
   try {
-    const response = await axios.get(url, config);
+    const response = await axios.get<T>(url, config);
     clearTimeout(timeoutId);
     return response;
   } catch (error) {
-    const backoff = new Promise((resolve) => {
-      setTimeout(() => resolve(), config.retry.retryDelay);
+    const backoff = new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), retry.retryDelay);
     });
 
-    if (config.retry.retryCount < config.retry.limit && !error.response) {
-      config.retry.retryCount += 1;
+    if (retry.retryCount < retry.limit && !(isAxiosError(error) && error.response)) {
+      retry.retryCount += 1;
       await backoff;
-      console.log(`${url} 第 ${config.retry.retryCount} 次重试请求`);
-      return retryGet(url, config);
+      console.log(`${url} 第 ${retry.retryCount} 次重试请求`);
+      return retryGet<T>(url, config);
     } else {
       throw error;
     }
   }
 };
-axios.retryGet = retryGet;
 
-
-export default axios;
+// The instance gains `retryGet` at module load, exactly as before; Object.assign
+// is a property assignment that hands the same instance back.
+export default Object.assign(axios, { retryGet });

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Canonicalizes scraped VA names so a VA who registered under several
 // spellings folds onto one t_va row instead of one row per spelling.
 //
@@ -14,9 +13,21 @@
 // database/migrations/20260814000000_merge_va_aliases.js.
 
 import assert from 'assert';
-import rawAliases from './va-aliases.json' with { type: 'json' };
+import vaAliasesJson from './va-aliases.json' with { type: 'json' };
 
-let aliases = {};
+/**
+ * The JSON file's shape: `variant name -> canonical name`, plus the
+ * `_comment` metadata key which is dropped below.
+ */
+interface AliasFile {
+  [name: string]: string;
+}
+
+// Typed at the import boundary: the JSON module's inferred object type has
+// every key and value as string, so it widens cleanly into the map.
+const rawAliases: AliasFile = vaAliasesJson;
+
+let aliases: AliasFile = {};
 // Drop the _comment metadata key.
 for (const [k, v] of Object.entries(rawAliases)) {
   if (k.startsWith('_')) continue;
@@ -28,9 +39,13 @@ for (const [k, v] of Object.entries(rawAliases)) {
  * @param {string} name Scraped VA name.
  * @returns {string} Canonical name to store/resolve under.
  */
-const canonicalizeVaName = (name) => (name != null && Object.prototype.hasOwnProperty.call(aliases, name))
-  ? aliases[name]
-  : name;
+function canonicalizeVaName(name: string): string;
+function canonicalizeVaName(name: null): null;
+function canonicalizeVaName(name: string | null): string | null {
+  return (name != null && Object.prototype.hasOwnProperty.call(aliases, name))
+    ? aliases[name]
+    : name;
+}
 
 if (process.env.NODE_ENV !== 'production' && import.meta.main) {
   assert.strictEqual(canonicalizeVaName('乙倉ゅい（乙倉由依）'), '乙倉ゅい');

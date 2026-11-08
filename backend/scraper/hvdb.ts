@@ -1,21 +1,34 @@
-// @ts-nocheck
-
 import * as cheerio from 'cheerio'; // 解析器
+import type { AxiosError } from 'axios';
 
 import axios from './axios.ts'; // 数据请求
 import { nameToUUID } from './utils.ts';
 import { formatID } from '../filesystem/utils.ts';
 import { isBooksId } from '../work-id.ts';
+import type { LabelInput, ScrapedCircle } from '../types/scraper.ts';
+
+/**
+ * What a public HVDB work page yields. Callers only consume `vas` (a fallback
+ * when the DLsite page credits none), so the other fields stay optional.
+ */
+interface HvdbWorkMetadata {
+  id?: string;
+  title?: string;
+  circle?: ScrapedCircle;
+  nsfw?: boolean;
+  tags: LabelInput[];
+  vas: LabelInput[];
+}
 
 // 修复之前抓取hvdb数据的bug，之前声优名字只能抓到最后一个单字而不是完整的名字，这里修复
-function scrapeHvdbHtml(data) {
+function scrapeHvdbHtml(data: string): HvdbWorkMetadata {
   // 转换成 jQuery 对象
   const $ = cheerio.load(data);
-  const work = {tags: [], vas: []};
+  const work: HvdbWorkMetadata = {tags: [], vas: []};
   work.title = $('input#Name').attr('value');
 
-  function getId(text) {
-    const reMatch = /\/(\d*)$/.exec(text);
+  function getId(text: string | undefined) {
+    const reMatch = /\/(\d*)$/.exec(text ?? '');
     return reMatch ? reMatch[1] : "";
   }
   
@@ -56,7 +69,7 @@ function scrapeHvdbHtml(data) {
  * Scrapes work metadata from public HVDB page HTML.
  * @param {number} id Work id.
  */
-const scrapeWorkMetadataFromHVDB = id => new Promise((resolve, reject) => {
+const scrapeWorkMetadataFromHVDB = (id: string): Promise<HvdbWorkMetadata> => new Promise((resolve, reject) => {
   // HVDB is doujin-only and keyed by bare digits; see the same guard in asmrOne.js.
   if (isBooksId(id)) {
     reject(new Error('HVDB does not index DLsite books works.'));
@@ -67,7 +80,7 @@ const scrapeWorkMetadataFromHVDB = id => new Promise((resolve, reject) => {
   const url = `https://hvdb.me/Dashboard/WorkDetails/${id}`;
 
   console.log(`[RJ${rjcode}] 从 HVDB 抓取元数据...`);
-  axios.retryGet(url, { retry: {} })
+  axios.retryGet<string>(url, { retry: {} })
     .then(response => {
       console.log('res HVDB');
       return response.data;
@@ -83,7 +96,7 @@ const scrapeWorkMetadataFromHVDB = id => new Promise((resolve, reject) => {
         resolve(work);
       }
     })
-    .catch((error) => {
+    .catch((error: AxiosError) => {
       if (error.response) {
         // 请求已发出，但服务器响应的状态码不在 2xx 范围内
         reject(new Error(`Couldn't request work page HTML (${url}), received: ${error.response.status}.`));

@@ -1,12 +1,23 @@
-// @ts-nocheck
-
 import * as cheerio from 'cheerio'; // 解析器
+import { isAxiosError } from 'axios';
+import type { AxiosError } from 'axios';
 
 import axios from './axios.ts'; // 数据请求
 import { nameToUUID, hasLetter } from './utils.ts';
 import { scrapeWorkMetadataFromHVDB } from './hvdb.ts';
 import { formatID } from '../filesystem/utils.ts';
 import { workno } from '../work-id.ts';
+import type {
+  CoverUrls,
+  DescriptionPart,
+  DescriptionTrack,
+  DlsiteReview,
+  LabelInput,
+  RateCountDetail,
+  SampleImage,
+  ScrapedWorkMetadata,
+  WorkStats,
+} from '../types/scraper.ts';
 
 // 常に日本語ロケールを使用
 const LOCALE_PARAM = '/?locale=ja_JP';
@@ -21,7 +32,7 @@ const AUTHOR = '作者';
 
 // DLsite serves asset URLs protocol-relative ("//img.dlsite.jp/..."); make them
 // absolute so callers can hand them straight to axios.
-const absoluteAssetUrl = (u) => {
+const absoluteAssetUrl = (u: string | undefined): string => {
   if (!u) return '';
   const trimmed = u.trim();
   if (trimmed.startsWith('//')) return `https:${trimmed}`;
@@ -40,8 +51,8 @@ const absoluteAssetUrl = (u) => {
  * @param {Function} $ Cheerio instance.
  * @returns {Array<Object>} [{ type, heading, text, images, tracks }]
  */
-const parseDescriptionParts = ($) => {
-  const parts = [];
+const parseDescriptionParts = ($: cheerio.CheerioAPI): DescriptionPart[] => {
+  const parts: DescriptionPart[] = [];
 
   $('div[itemprop="description"] .work_parts').each(function () {
     const $part = $(this);
@@ -53,7 +64,7 @@ const parseDescriptionParts = ($) => {
 
     // Full-size image first: the <a> wrapper points at the original, the <img>
     // inside it may be a resized copy.
-    const images = [];
+    const images: string[] = [];
     $area.find('a[href], img[src]').each(function () {
       const el = $(this);
       const raw = el.is('a') ? el.attr('href') : el.attr('src');
@@ -63,7 +74,7 @@ const parseDescriptionParts = ($) => {
       }
     });
 
-    const tracks = [];
+    const tracks: DescriptionTrack[] = [];
     $area.find('ul.work_tracklist li.work_tracklist_item').each(function () {
       const title = $(this).children('.title').text().trim();
       const time = $(this).children('.time').text().trim();
@@ -90,7 +101,7 @@ const parseDescriptionParts = ($) => {
  * @param {Function} $ Cheerio instance.
  * @returns {String} Inner HTML of the description block, '' when it has none.
  */
-const descriptionHtml = ($) => {
+const descriptionHtml = ($: cheerio.CheerioAPI): string => {
   const html = $('div[itemprop="description"]').html();
   return html ? html.trim() : '';
 };
@@ -105,16 +116,16 @@ const descriptionHtml = ($) => {
  * @param {Function} $ Cheerio instance.
  * @returns {Array<Object>} [{ url, thumb, width, height }]
  */
-const parseSampleImages = ($) => {
-  const samples = [];
+const parseSampleImages = ($: cheerio.CheerioAPI): SampleImage[] => {
+  const samples: SampleImage[] = [];
 
   $('.product-slider-data div[data-src]').each(function () {
     const el = $(this);
     const url = absoluteAssetUrl(el.attr('data-src'));
     if (!url || url.includes('_img_main')) return;
 
-    const width = parseInt(el.attr('data-width'), 10);
-    const height = parseInt(el.attr('data-height'), 10);
+    const width = parseInt(el.attr('data-width')!, 10);
+    const height = parseInt(el.attr('data-height')!, 10);
     samples.push({
       url,
       thumb: absoluteAssetUrl(el.attr('data-thumb')) || null,
@@ -127,16 +138,27 @@ const parseSampleImages = ($) => {
 };
 
 /**
+ * The shape the DLsite builders fill in. Unlike ASMR.one's response, these
+ * always start with every label array present (empty when the page has none),
+ * so the pushes below need no null checks.
+ */
+interface DlsiteWorkDraft extends ScrapedWorkMetadata {
+  illustrators: LabelInput[];
+  scriptWriters: LabelInput[];
+  authors: LabelInput[];
+}
+
+/**
  * Scrapes static work metadata from public DLsite page HTML.
  * @param {number} id Work id.
  */
-const scrapeStaticWorkMetadataFromDLsite = (id) => new Promise((resolve, reject) => {
+const scrapeStaticWorkMetadataFromDLsite = (id: string): Promise<ScrapedWorkMetadata> => new Promise((resolve, reject) => {
   const code = workno(formatID(id));
   const url = `https://www.dlsite.com/maniax/work/=/product_id/${code}.html${LOCALE_PARAM}`;
 
-  const work = { id, tags: [], vas: [], illustrators: [], scriptWriters: [], authors: [], sampleImages: [] };
+  const work: DlsiteWorkDraft = { id, title: '', circle: {}, tags: [], vas: [], illustrators: [], scriptWriters: [], authors: [], sampleImages: [] };
 
-  axios.retryGet(url, {
+  axios.retryGet<string>(url, {
     retry: {}
   })
     .then(response => response.data)
@@ -144,7 +166,7 @@ const scrapeStaticWorkMetadataFromDLsite = (id) => new Promise((resolve, reject)
       const $ = cheerio.load(data);
 
       // 标题
-      work.title = $('meta[property="og:title"]').attr('content');
+      work.title = $('meta[property="og:title"]').attr('content')!;
       // fallback
       if (work.title === undefined) {
         work.title = $(`a[href="${url}"] span`).text();
@@ -183,9 +205,10 @@ const scrapeStaticWorkMetadataFromDLsite = (id) => new Promise((resolve, reject)
         }).parent().children('td').children('a');
       if (seriesElement.length) {
         const seriesUrl = seriesElement.attr('href');
-        if (seriesUrl.match(/SRI(\d{10})/)) {
+        const seriesMatch = seriesUrl!.match(/SRI(\d{10})/);
+        if (seriesMatch) {
           work.series = {
-            id: parseInt(seriesUrl.match(/SRI(\d{10})/)[1]),
+            id: parseInt(seriesMatch[1]),
             name: seriesElement.text()
           };
         }
@@ -198,9 +221,10 @@ const scrapeStaticWorkMetadataFromDLsite = (id) => new Promise((resolve, reject)
         }).parent().children('td').children('div').children('a').each(function() {
           const tagUrl = $(this).attr('href');
           const tagName = $(this).text();
-          if (tagUrl.match(/genre\/(\d{3})/)) {
+          const tagMatch = tagUrl!.match(/genre\/(\d{3})/);
+          if (tagMatch) {
             work.tags.push({
-              id: parseInt(tagUrl.match(/genre\/(\d{3})/)[1]),
+              id: parseInt(tagMatch[1]),
               name: tagName
             });
           }
@@ -289,14 +313,14 @@ const scrapeStaticWorkMetadataFromDLsite = (id) => new Promise((resolve, reject)
   
             resolve(work);
           })
-          .catch((error) => {
+          .catch((error: Error) => {
             reject(new Error(error.message));
           });
       } else {
         resolve(work);
       } 
     })
-    .catch((error) => {
+    .catch((error: AxiosError) => {
       if (error.response) {
         reject(new Error(`Couldn't request work page HTML (${url}), received: ${error.response.status}.`));
       } else {
@@ -305,12 +329,32 @@ const scrapeStaticWorkMetadataFromDLsite = (id) => new Promise((resolve, reject)
     });
 });
 
-const scrapeStaticWorkMetadataFromDLsiteJson = (id) => new Promise((resolve, reject) => {
+/** One entry of the `product.json` array the maniax API returns. */
+interface DlsiteProductJson {
+  product_name: string;
+  maker_name: string;
+  /** DLsite's age category; `3` is R18. */
+  age_category: number;
+  regist_date: string;
+  series_id?: string;
+  series_name?: string;
+  genres: Array<{ id: string | number; name: string }>;
+  creaters: {
+    voice_by: Array<{ name: string }>;
+    illust_by?: Array<{ name: string }>;
+    scenario_by?: Array<{ name: string }>;
+    created_by?: Array<{ name: string }>;
+  };
+  intro_s?: string;
+  image_samples?: Array<{ url: string; width?: string | number; height?: string | number }>;
+}
+
+const scrapeStaticWorkMetadataFromDLsiteJson = (id: string): Promise<ScrapedWorkMetadata> => new Promise((resolve, reject) => {
   const code = workno(formatID(id));
   const url = `https://www.dlsite.com/maniax/api/=/product.json?workno=${code}`;
 
-  const work = { id, tags: [], vas: [], illustrators: [], scriptWriters: [], authors: [], sampleImages: [] };
-  axios.retryGet(url, {
+  const work: DlsiteWorkDraft = { id, title: '', circle: {}, tags: [], vas: [], illustrators: [], scriptWriters: [], authors: [], sampleImages: [] };
+  axios.retryGet<DlsiteProductJson[]>(url, {
     retry: {}
   })
     .then(response => response.data)
@@ -328,7 +372,7 @@ const scrapeStaticWorkMetadataFromDLsiteJson = (id) => new Promise((resolve, rej
 
       // 系列
       if (data.series_id) {
-        work.series = { name: data.series_name };
+        work.series = { name: data.series_name! };
       }
       
       work.tags = data.genres.map((v) => ({
@@ -379,8 +423,8 @@ const scrapeStaticWorkMetadataFromDLsiteJson = (id) => new Promise((resolve, rej
           .map((img) => ({
             url: absoluteAssetUrl(img.url),
             thumb: null,
-            width: parseInt(img.width, 10) || null,
-            height: parseInt(img.height, 10) || null,
+            width: parseInt(String(img.width), 10) || null,
+            height: parseInt(String(img.height), 10) || null,
           }))
           .filter(img => img.url);
       }
@@ -405,14 +449,14 @@ const scrapeStaticWorkMetadataFromDLsiteJson = (id) => new Promise((resolve, rej
   
             resolve(work);
           })
-          .catch((error) => {
+          .catch((error: Error) => {
             reject(new Error(error.message));
           });
       } else {
         resolve(work);
       } 
     })
-    .catch((error) => {
+    .catch((error: AxiosError) => {
       if (error.response) {
         reject(new Error(`Couldn't request work json (${url}), received: ${error.response.status}.`));
       } else {
@@ -421,18 +465,29 @@ const scrapeStaticWorkMetadataFromDLsiteJson = (id) => new Promise((resolve, rej
     });
 });
 
+/** The product info the maniax-touch endpoint returns for one work. */
+interface DlsiteDynamicInfo {
+  dl_count?: number | string | null;
+  rate_average_2dp?: number | null;
+  rate_count?: number | null;
+  rate_count_detail?: RateCountDetail[];
+  review_count?: number | null;
+  price?: number | null;
+  rank: string | unknown[];
+}
+
 /**
  * Requests dynamic work metadata from public DLsite API.
  * @param {number} id Work id.
  */
-const scrapeDynamicWorkMetadataFromDLsite = id => new Promise((resolve, reject) => {
+const scrapeDynamicWorkMetadataFromDLsite = (id: string): Promise<WorkStats> => new Promise((resolve, reject) => {
   const code = workno(formatID(id));
   const url = `https://www.dlsite.com/maniax-touch/product/info/ajax?product_id=${code}`;
 
-  axios.retryGet(url, { retry: {} })
+  axios.retryGet<Record<string, DlsiteDynamicInfo>>(url, { retry: {} })
     .then(response => response.data[code])
     .then((data) => {
-      const work = {};
+      const work: WorkStats = {};
       work.dl_count = data.dl_count ? data.dl_count : "0";
       work.rate_average_2dp = data.rate_average_2dp ? data.rate_average_2dp : 0.0;
       work.rate_count = data.rate_count ? data.rate_count : 0;
@@ -445,7 +500,7 @@ const scrapeDynamicWorkMetadataFromDLsite = id => new Promise((resolve, reject) 
       console.log(`[${code}] 成功从 DLSite 抓取Dynamic元数据...`);
       resolve(work);
     })
-    .catch((error) => {
+    .catch((error: AxiosError) => {
       if (error.response) {
         reject(new Error(`Couldn't request work page HTML (${url}), received: ${error.response.status}.`));
       } else {
@@ -458,7 +513,7 @@ const scrapeDynamicWorkMetadataFromDLsite = id => new Promise((resolve, reject) 
  * Scrapes work metadata from public DLsite page HTML.
  * @param {number} id Work id.
  */
-const scrapeWorkMetadataFromDLsite = (id) => {
+const scrapeWorkMetadataFromDLsite = (id: string): Promise<ScrapedWorkMetadata> => {
   return Promise.all([
     scrapeStaticWorkMetadataFromDLsite(id),
     scrapeDynamicWorkMetadataFromDLsite(id)
@@ -474,7 +529,7 @@ const scrapeWorkMetadataFromDLsite = (id) => {
  * https://www.dlsite.com/maniax/api/=/product.json?workno=RJ00000000
  * @param {number} id Work id.
  */
-const scrapeWorkMetadataFromDLsiteJson = (id) => {
+const scrapeWorkMetadataFromDLsiteJson = (id: string): Promise<ScrapedWorkMetadata> => {
   return Promise.all([
     scrapeStaticWorkMetadataFromDLsiteJson(id),
     scrapeDynamicWorkMetadataFromDLsite(id)
@@ -496,14 +551,53 @@ const REVIEW_MAX_PAGES = 20; // 1000 reviews; a broken response can't loop forev
 // processFolder resolves, the UI sits on that work's last log line forever.
 const REVIEW_TIME_BUDGET_MS = 120 * 1000;
 
+/** One raw review as DLsite's review API returns it. */
+interface DlsiteRawReview {
+  member_review_id?: string | number;
+  workno?: string;
+  reviewer_id?: string | number | null;
+  nick_name?: string | null;
+  rate?: string | number | null;
+  review_title?: string | null;
+  review_text?: string | null;
+  spoiler?: string | number | null;
+  recommend?: string | number | null;
+  is_purchased?: string | number | null;
+  good_review?: string | number | null;
+  bad_review?: string | number | null;
+  /** DLsite genre id -> name, for the genres the reviewer picked. */
+  genre?: Record<string, string>;
+  entry_date?: string | null;
+  regist_date?: string | null;
+}
+
+/** The review API's page envelope. */
+interface DlsiteReviewResponse {
+  is_success?: boolean;
+  error_msg?: string;
+  review_list?: DlsiteRawReview[];
+}
+
+/** Options of `scrapeWorkReviewsFromDLsite`. */
+interface ReviewScrapeOptions {
+  /** Sort order accepted by the API. */
+  order?: string;
+  /** Page size. */
+  limit?: number;
+  /** Safety cap on pages fetched. */
+  maxPages?: number;
+  /** Wall-clock budget for the whole pagination run. */
+  budgetMs?: number;
+}
+
 /**
  * Normalizes one raw review from the DLsite review API.
  * @param {Object} raw
  * @returns {Object}
  */
-const normalizeReview = (raw) => {
-  const toInt = (v) => {
-    const n = parseInt(v, 10);
+const normalizeReview = (raw: DlsiteRawReview): DlsiteReview => {
+  const toInt = (v: string | number | null | undefined): number | null => {
+    const n = parseInt(String(v), 10);
     return Number.isNaN(n) ? null : n;
   };
 
@@ -542,7 +636,7 @@ const normalizeReview = (raw) => {
  * @param {Number} [options.maxPages=200] Safety cap on pages fetched.
  * @returns {Promise<Array<Object>>} Normalized reviews, de-duplicated by id.
  */
-const scrapeWorkReviewsFromDLsite = async (id, options = {}) => {
+const scrapeWorkReviewsFromDLsite = async (id: string, options: ReviewScrapeOptions = {}): Promise<DlsiteReview[]> => {
   const code = workno(formatID(id));
   const order = options.order || 'regist_d';
   const limit = options.limit || REVIEW_PAGE_SIZE;
@@ -551,8 +645,8 @@ const scrapeWorkReviewsFromDLsite = async (id, options = {}) => {
   const budgetMs = options.budgetMs || REVIEW_TIME_BUDGET_MS;
   const deadline = Date.now() + budgetMs;
 
-  const reviews = [];
-  const seen = new Set();
+  const reviews: DlsiteReview[] = [];
+  const seen = new Set<string>();
 
   for (let page = 1; page <= maxPages; page += 1) {
     if (Date.now() > deadline) {
@@ -562,12 +656,12 @@ const scrapeWorkReviewsFromDLsite = async (id, options = {}) => {
     const url = `https://www.dlsite.com/maniax/api/review?product_id=${code}`
       + `&order=${order}&limit=${limit}&page=${page}&locale=ja_JP`;
 
-    let data;
+    let data: DlsiteReviewResponse;
     try {
-      const response = await axios.retryGet(url, { retry: {} });
+      const response = await axios.retryGet<DlsiteReviewResponse>(url, { retry: {} });
       data = response.data;
     } catch (error) {
-      if (error.response) {
+      if (isAxiosError(error) && error.response) {
         throw new Error(`Couldn't request work reviews (${url}), received: ${error.response.status}.`);
       }
       throw error;
@@ -595,17 +689,24 @@ const scrapeWorkReviewsFromDLsite = async (id, options = {}) => {
   return reviews;
 };
 
+/** What a translated work's edition page yields for the cover download. */
+interface CoverScrapeResult {
+  coverFromId: string;
+  isNoImgMain: boolean;
+  coverUrls?: CoverUrls;
+}
+
 /**
  * Scrapes the source cover work id which holds the cover image, 
  * since some translated work(id_translated) in dlsite do not has its own cover, 
  * but share the cover from original cover work(id_source).
  * @param {number} id_translated Work id.
  */
-const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated) => new Promise((resolve, reject) => {
+const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated: string): Promise<CoverScrapeResult> => new Promise((resolve, reject) => {
   const code = workno(formatID(id_translated));
   const url = `https://www.dlsite.com/maniax/work/=/product_id/${code}.html${LOCALE_PARAM}`;
 
-  axios.retryGet(url, {
+  axios.retryGet<string>(url, {
     retry: {}
   })
     .then(response => response.data)
@@ -616,7 +717,7 @@ const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated) => new Promise(
         .map(l => l.attribs['href'])
         .filter(h => typeof h === 'string')
         .map(h => /RJ(\d{6,8})/.exec(h))
-        .filter(r => r != null && r.length >= 2)
+        .filter((r): r is RegExpExecArray => r != null && r.length >= 2)
         .map(r =>r[1]);
       
       let isNoImgMain = false;
@@ -630,7 +731,7 @@ const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated) => new Promise(
           }
           return /RJ(\d{6,8})[_\w.]+$/.exec(h);
         })
-        .filter(r => r != null && r.length >= 2)
+        .filter((r): r is RegExpExecArray => r != null && r.length >= 2)
         .map(r => r[1]);
 
       const hit_id_list = linked_id_list.filter(id => possible_image_id_list.includes(id));
@@ -639,7 +740,7 @@ const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated) => new Promise(
       // <translation-product-slider> component that carries the real cover
       // URLs directly (under the original work id). When present, expose them
       // so the caller can download without guessing paths.
-      const realCoverUrls = {};
+      const realCoverUrls: CoverUrls = {};
       const slider = $('translation-product-slider').first();
       if (slider.length) {
         const sliderSrc = slider.attr('src') || '';
@@ -648,7 +749,7 @@ const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated) => new Promise(
         // the work page so a malformed value can't throw out of the scrape.
         // Anything that doesn't resolve to an image path is not a cover — a
         // placeholder like "#" would otherwise resolve to the page itself.
-        const toAbsolute = (u) => {
+        const toAbsolute = (u: string): string => {
           try {
             const resolved = new URL(u, url);
             return /\.(jpe?g|png|webp|gif)$/i.test(resolved.pathname) ? resolved.href : '';
@@ -679,14 +780,14 @@ const scrapeCoverIdForTranslatedWorkFromDLsite = (id_translated) => new Promise(
         }
       }
 
-      const result = {
+      const result: CoverScrapeResult = {
         coverFromId: hit_id_list.length > 0 ? hit_id_list[0] : id_translated,
         isNoImgMain,
         coverUrls: Object.keys(realCoverUrls).length > 0 ? realCoverUrls : undefined,
       };
       resolve(result);
     })
-    .catch((error) => {
+    .catch((error: AxiosError) => {
       if (error.response) {
         reject(new Error(`Couldn't request work page HTML (${url}), received: ${error.response.status}.`));
       } else {

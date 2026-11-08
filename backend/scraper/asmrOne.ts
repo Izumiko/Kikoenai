@@ -1,18 +1,17 @@
-// @ts-nocheck
-
 import * as cheerio from 'cheerio'; // 解析器
 
 import axios from './axios.ts'; // 数据请求
 import { nameToUUID } from './utils.ts';
 import { formatID } from '../filesystem/utils.ts';
 import { isBooksId } from '../work-id.ts';
+import type { AsmrOneWorkMetadata } from '../types/scraper.ts';
 
-let asmrOneApiUrl = '';
+let asmrOneApiUrl: string | undefined = '';
 
 async function updateAsmrOneApiUrl() {
   const url = `https://asmr.one/index.html`;
   try {
-    const response = await axios.retryGet(url, {
+    const response = await axios.retryGet<string>(url, {
       retry: {},
       headers: { "cookie": 'locale=ja_JP' },
     });
@@ -27,7 +26,7 @@ async function updateAsmrOneApiUrl() {
   }
 }
 
-async function scrapeWorkMetadataFromAsmrOne(id) {
+async function scrapeWorkMetadataFromAsmrOne(id: string): Promise<AsmrOneWorkMetadata> {
   // ASMR.one indexes the doujin floor only, and its API takes bare digits — a
   // books id would either 404 or, worse, resolve to the RJ work of the same
   // number and store a different work's metadata under this id.
@@ -37,7 +36,9 @@ async function scrapeWorkMetadataFromAsmrOne(id) {
 
   const rjcode = formatID(id);
   const url = `https://api.asmr-200.com/api/workInfo/${rjcode}`;
-  const response = await axios.retryGet(url, {
+  // ASMR.one reports `id` as a bare number here; it is overwritten with the
+  // padded string below before anything reads it.
+  const response = await axios.retryGet<AsmrOneWorkMetadata>(url, {
     retry: {},
     headers: { "cookie": 'locale=ja_JP' },
   });

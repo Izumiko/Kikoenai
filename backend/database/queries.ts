@@ -7,6 +7,14 @@ import { parseSearchQuery, RELATION_FIELDS } from './search-query.ts';
 import type { SearchTerm } from './search-query.ts';
 import { collectWorkImages } from '../filesystem/utils.ts';
 import type {
+  DescriptionPart,
+  DlsiteReview,
+  LabelInput,
+  ReviewGenre,
+  SampleImage,
+  WorkMetadata,
+} from '../types/scraper.ts';
+import type {
   AuthorWorkRow,
   DlsiteReviewRow,
   HistoryRow,
@@ -23,61 +31,10 @@ import type {
   WorkRow,
 } from '../types/db.ts';
 
-/** A label reference as the scrapers and the client send it. */
-interface LabelInput {
-  id?: string;
-  name: string;
-}
-
 /** A label reference as it is stored inside the *Obj JSON columns. */
 interface LabelRef {
   id: string;
   name: string;
-}
-
-/** One sample image as `t_work.sample_images` stores it (JSON). */
-interface SampleImage {
-  url: string;
-  thumb?: string;
-  width?: number;
-  height?: number;
-  /** File name on disk, or null when the image was never downloaded. */
-  file?: string | null;
-}
-
-/** One block of the scraped 作品内容 stored in `t_work.description_parts` (JSON). */
-interface DescriptionPart {
-  type: string;
-  heading?: string;
-  images?: unknown[];
-  tracks?: Array<{ title: string; time?: string }>;
-}
-
-/** A written-out work metadata object: what the scrapers produce and hand to the DB. */
-interface WorkMetadata {
-  id: string;
-  title: string;
-  rootFolderName: string;
-  dir: string;
-  circle: LabelInput;
-  nsfw?: boolean | number | null;
-  release?: string | null;
-  dl_count?: number | null;
-  price?: number | null;
-  review_count?: number | null;
-  rate_count?: number | null;
-  rate_average_2dp?: number | null;
-  rate_count_detail?: unknown;
-  rank?: unknown;
-  description?: string | null;
-  descriptionParts?: DescriptionPart[] | null;
-  sampleImages?: SampleImage[] | null;
-  tags: LabelInput[];
-  vas: LabelInput[];
-  illustrators?: LabelInput[] | null;
-  scriptWriters?: LabelInput[] | null;
-  authors?: LabelInput[] | null;
-  series?: LabelInput | null;
 }
 
 /** One row of a batch-fetched label relation: the work it belongs to plus the label. */
@@ -198,24 +155,6 @@ interface PlayHistoryQueryOptions {
   limit?: number;
   excludeFinished?: string;
   offset?: number;
-}
-
-/** One normalized review as scrapeWorkReviewsFromDLsite returns it. */
-interface DlsiteReviewInput {
-  id: string;
-  reviewerId?: string | null;
-  reviewerName?: string | null;
-  rate?: number | null;
-  title?: string | null;
-  text?: string | null;
-  spoiler?: boolean | number | null;
-  recommend?: boolean | number | null;
-  isPurchased?: boolean | number | null;
-  goodReview?: number | null;
-  badReview?: number | null;
-  genres?: Array<{ id?: string; name: string }>;
-  entryDate?: string | null;
-  registDate?: string | null;
 }
 
 /** A `t_work_file` row as it is written back. */
@@ -486,8 +425,10 @@ const makeQueries = (knex: Knex) => {
    * Takes a work metadata object and inserts it into the database.
    */
   const insertWorkMetadata = async (work: WorkMetadata) => knex.transaction(async (trx) => {
-    // Resolve circle UUID by name
-    const circleId = await resolveLabel(trx, 't_circle', work.circle.name);
+    // Resolve circle UUID by name. A page with no circle leaves the name
+    // undefined, which nameToUUID then rejects — unchanged upstream behaviour;
+    // the assertion only states what the DB contract already assumes.
+    const circleId = await resolveLabel(trx, 't_circle', work.circle.name!);
 
     await trx('t_work')
       .insert({
@@ -1526,7 +1467,7 @@ const makeQueries = (knex: Knex) => {
    * @param work_id
    * @param reviews Normalized reviews from scrapeWorkReviewsFromDLsite.
    */
-  const replaceWorkDlsiteReviews = async (work_id: string, reviews: DlsiteReviewInput[]) => knex.transaction(async (trx) => {
+  const replaceWorkDlsiteReviews = async (work_id: string, reviews: DlsiteReview[]) => knex.transaction(async (trx) => {
     await trx('t_dlsite_review').where('work_id', work_id).del();
     if (!reviews || !reviews.length) return;
 
@@ -1557,14 +1498,14 @@ const makeQueries = (knex: Knex) => {
    * Reads a work's stored DLsite reviews, newest first.
    * @param work_id
    */
-  async function getWorkDlsiteReviews(work_id: string): Promise<Array<DlsiteReviewRow & { genres: unknown[] }>> {
+  async function getWorkDlsiteReviews(work_id: string): Promise<Array<Omit<DlsiteReviewRow, 'genres'> & { genres: ReviewGenre[] }>> {
     const rows: DlsiteReviewRow[] = await knex('t_dlsite_review')
       .select('*')
       .where('work_id', '=', work_id)
       .orderBy('regist_date', 'desc');
 
     return rows.map((row) => {
-      let genres = [];
+      let genres: ReviewGenre[] = [];
       try {
         genres = row.genres ? JSON.parse(row.genres) : [];
       } catch {

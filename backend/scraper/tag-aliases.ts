@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Canonicalizes scraped DLsite tag names so a DLsite rename folds onto the
 // existing (old-name) t_tag row instead of creating a new one.
 //
@@ -18,9 +17,21 @@
 // a rarely-changed hand-curated map; add a fs.watch if it ever becomes hot.
 
 import assert from 'assert';
-import rawAliases from './tag-aliases.json' with { type: 'json' };
+import tagAliasesJson from './tag-aliases.json' with { type: 'json' };
 
-let aliases = {};
+/**
+ * The JSON file's shape: `variant name -> canonical name`, plus `_`-prefixed
+ * metadata keys (documentation, not mappings) which are dropped below.
+ */
+interface AliasFile {
+  [name: string]: string;
+}
+
+// Typed at the import boundary: the JSON module's inferred object type has
+// every key and value as string, so it widens cleanly into the map.
+const rawAliases: AliasFile = tagAliasesJson;
+
+let aliases: AliasFile = {};
 // Drop the _comment / _format / _examples metadata keys.
 for (const [k, v] of Object.entries(rawAliases)) {
   if (k.startsWith('_')) continue;
@@ -32,9 +43,13 @@ for (const [k, v] of Object.entries(rawAliases)) {
  * @param {string} name Scraped (current) Japanese tag name.
  * @returns {string} Canonical name to store/resolve under.
  */
-const canonicalizeTagName = (name) => (name != null && Object.prototype.hasOwnProperty.call(aliases, name))
-  ? aliases[name]
-  : name;
+function canonicalizeTagName(name: string): string;
+function canonicalizeTagName(name: null): null;
+function canonicalizeTagName(name: string | null): string | null {
+  return (name != null && Object.prototype.hasOwnProperty.call(aliases, name))
+    ? aliases[name]
+    : name;
+}
 
 if (process.env.NODE_ENV !== 'production' && import.meta.main) {
   // ponytail: smallest self-check — unmapped→identity (the shipped stub is an

@@ -1,13 +1,19 @@
-// @ts-nocheck
-
 import * as cheerio from 'cheerio';
+import type { AxiosError } from 'axios';
 import axios from './axios.ts';
 import { nameToUUID } from './utils.ts';
 import { canonicalizeWorkId, fanzaCid } from '../work-id.ts';
+import type { LabelInput, RateCountDetail, ScrapedWorkMetadata } from '../types/scraper.ts';
 
 // The ジャンル row mixes in storefront section and sale-status markers that
 // carry no genre information; skip them.
 const IGNORED_TAGS = new Set(['旧作', '新作', '成人向け', '男性向け', '女性向け']);
+
+/** The builder: every label array starts present, so the pushes below can't be undefined. */
+interface FanzaWorkDraft extends ScrapedWorkMetadata {
+  illustrators: LabelInput[];
+  scriptWriters: LabelInput[];
+}
 
 /**
  * Scrape work metadata from Fanza (DMM) doujin detail page.
@@ -16,10 +22,10 @@ const IGNORED_TAGS = new Set(['旧作', '新作', '成人向け', '男性向け'
  *        returned metadata carries the canonical id (see work-id.js).
  * @returns {Promise<Object>} Work metadata object.
  */
-const scrapeWorkMetadataFromFanza = (cid) => new Promise((resolve, reject) => {
+const scrapeWorkMetadataFromFanza = (cid: string): Promise<ScrapedWorkMetadata> => new Promise((resolve, reject) => {
   const url = `https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=${fanzaCid(cid)}/`;
 
-  const work = {
+  const work: FanzaWorkDraft = {
     id: canonicalizeWorkId(cid),
     title: '',
     circle: {},
@@ -40,7 +46,7 @@ const scrapeWorkMetadataFromFanza = (cid) => new Promise((resolve, reject) => {
     coverUrls: null,
   };
 
-  axios.retryGet(url, {
+  axios.retryGet<string>(url, {
     retry: {},
     headers: {
       cookie: 'age_check_done=1; dc_doujin_age_check_done=1',
@@ -178,7 +184,7 @@ const scrapeWorkMetadataFromFanza = (cid) => new Promise((resolve, reject) => {
       }
       // Per-star distribution, stored in the same shape as DLsite's API:
       // [{review_point: 1, count, ratio}, ..., {review_point: 5, count, ratio}]
-      const detail = [];
+      const detail: RateCountDetail[] = [];
       $('.dcd-review__rating_map > div').each(function () {
         const starClass = $(this).find('span[class*="dcd-review-rating-"]').first().attr('class') || '';
         const starMatch = starClass.match(/dcd-review-rating-(\d)0/);
@@ -241,7 +247,7 @@ const scrapeWorkMetadataFromFanza = (cid) => new Promise((resolve, reject) => {
 
       resolve(work);
     })
-    .catch((error) => {
+    .catch((error: AxiosError) => {
       if (error.response) {
         reject(new Error(`Could not request Fanza work page (${url}), received: ${error.response.status}.`));
       } else {
