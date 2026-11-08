@@ -8,7 +8,7 @@
 //     app/                     = backend/build/ (the esbuild bundle + dist/ + static/)
 //     ffmpeg/ffmpeg.exe        standalone ffmpeg/ffprobe (BtbN GPL build)
 //     ffmpeg/ffprobe.exe
-//     Kikoenai.bat             launcher (sets KIKO_DATA_DIR + NODE_ENV)
+//     Kikoenai.bat             launcher (sets KIKO_DATA_DIR)
 //
 // The user unzips it and double-clicks Kikoenai.bat; no Node/ffmpeg on PATH
 // needed. Nothing in the bundle is native, so this runs on ANY host OS and the

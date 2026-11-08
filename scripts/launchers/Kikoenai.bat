@@ -7,9 +7,6 @@ rem users migrate from (drop your existing config/sqlite/covers here).
 set "ROOT=%~dp0"
 set "PATH=%ROOT%ffmpeg;%PATH%"
 set "KIKO_DATA_DIR=%ROOT%"
-rem NODE_ENV=production forces auth on (see backend/config.ts); the portable
-rem build must not answer /api as admin without a password. Do not remove.
-set "NODE_ENV=production"
 if not exist "%ROOT%config" mkdir "%ROOT%config"
 if not exist "%ROOT%sqlite" mkdir "%ROOT%sqlite"
 if not exist "%ROOT%covers" mkdir "%ROOT%covers"
