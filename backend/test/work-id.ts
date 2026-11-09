@@ -1,6 +1,6 @@
 // Canonical Fanza work ids (d215444) and the boundaries that still speak d_215444
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -111,7 +111,7 @@ describe('migration 20260828000000 (d_215444 → d215444)', { timeout: 10000 }, 
     await knex('t_work').insert([{ id: 'd_215444', title: 'Fanza' }, { id: '123456', title: 'DLsite' }]);
     await knex('r_tag_work').insert([{ tag_id: 'x', work_id: 'd_215444' }, { tag_id: 'x', work_id: '123456' }]);
     await knex('t_review').insert([{ work_id: 'd_215444', rating: 5 }]);
-  });
+  }, { timeout: 10000 });
 
   after(async function () {
     if (knex) await knex.destroy();

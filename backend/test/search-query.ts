@@ -1,6 +1,6 @@
 // Advanced search syntax: parser unit tests + end-to-end query behaviour
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -184,7 +184,7 @@ describe('getWorksByFilter() advanced filtering', { timeout: 10000 }, () => {
       for (const name of w.va) await knex('r_va_work').insert({ va_id: nameToUUID(name), work_id: w.id });
       for (const name of w.tag) await knex('r_tag_work').insert({ tag_id: nameToUUID(name), work_id: w.id });
     }
-  });
+  }, { timeout: 10000 });
 
   after(async () => {
     if (knex) await knex.destroy();

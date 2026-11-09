@@ -2,7 +2,7 @@
 // outbox arrives late carrying an old position; ordering by arrival would let it
 // clobber a newer one from another device.
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';

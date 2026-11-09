@@ -6,10 +6,10 @@
  * first saw the folder. For a library carried over from the old fork that is
  * the day of the initial scan, so hundreds of works collapse onto one
  * timestamp and "sort by date added" (an `order` option in
- * routes/metadata.js, shown as works.createdAt in Works.vue) becomes useless
+ * routes/metadata.ts, shown as works.createdAt in Works.vue) becomes useless
  * for everything acquired before the switch.
  *
- * Ids are matched with formatID, the same way import-legacy-history.js does it:
+ * Ids are matched with formatID, the same way import-legacy-history.ts does it:
  * old rows store bare integers, this schema stores them zero-padded.
  *
  * The only rule is **never move a date forward**. A work whose current
@@ -124,7 +124,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const oldDbPath = args.find(a => !a.startsWith('--'));
   if (!oldDbPath) {
-    console.error('Usage: node ./scripts/backport-work-dates.js <old-db.sqlite3> [--dry-run]');
+    console.error('Usage: node ./scripts/backport-work-dates.ts <old-db.sqlite3> [--dry-run]');
     process.exit(1);
   }
   runBackport({ oldDbPath: path.resolve(oldDbPath), dryRun: args.includes('--dry-run') })

@@ -1,7 +1,7 @@
 // Scan progress reporting: one message per line, a bounded snapshot, and a
 // durable copy on disk.
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';

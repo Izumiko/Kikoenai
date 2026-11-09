@@ -3,7 +3,7 @@
  * "#2.wav" and the like, by extracting the track list out of the scraped
  * DLsite description.
  *
- * The extraction itself lives in ../track-titles.js, shared with
+ * The extraction itself lives in ../track-titles.ts, shared with
  * POST /api/work/:id/track-titles/suggest. What is here is the CLI around it:
  * argument parsing, the loud precondition failures, and the write.
  *
@@ -11,14 +11,14 @@
  * database with no review step, which is the right shape for a terminal and the
  * wrong one for a web request -- the dialog proposes, this applies.
  *
- * Configuration is env only, never config.json -- see ../track-titles.js:
+ * Configuration is env only, never config.json -- see ../track-titles.ts:
  *
  *   KIKO_LLM_BASE_URL   OpenAI-compatible base, e.g. http://localhost:11434/v1
  *                       or https://openrouter.ai/api/v1
  *   KIKO_LLM_API_KEY    optional for local servers
  *   KIKO_LLM_MODEL      e.g. qwen3:8b
  *
- * DLsite works only: scraper/fanza.js extracts no description, so a d_ work has
+ * DLsite works only: scraper/fanza.ts extracts no description, so a d_ work has
  * nothing to work from.
  *
  * Handles exactly one work per run. Track-title extraction is a judgement call
@@ -181,7 +181,7 @@ async function run() {
   const description = htmlToText(work.description);
 
   if (!description) {
-    // Fanza is a dead end, not a "scrape it again" situation: scraper/fanza.js
+    // Fanza is a dead end, not a "scrape it again" situation: scraper/fanza.ts
     // extracts no description at all, so POST /api/refresh would change nothing.
     if (isFanzaId(workId)) {
       throw new Error(`Work ${workId} is a Fanza work, and the Fanza scraper does not extract descriptions — there is nothing to extract titles from. DLsite works only.`);

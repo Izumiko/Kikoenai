@@ -1,7 +1,6 @@
 // Test manual metadata editing and refresh-merge semantics
 
-process.env.FREEZE_CONFIG_FILE = '1';
-process.env.NODE_ENV = 'test';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -102,7 +101,7 @@ describe('editWorkMetadata', { timeout: 10000 }, () => {
     const seriesId = nameToUUID('测试系列');
     await db.knex.raw('INSERT OR IGNORE INTO t_series(id, name) VALUES (?, ?)', [seriesId, '测试系列']);
     await db.knex('r_series_work').insert({ series_id: seriesId, work_id: workId });
-  });
+  }, { timeout: 10000 });
 
   it('1. Core fields: edit title/nsfw/release', async function () {
     await db.editWorkMetadata(workId, {
@@ -366,7 +365,7 @@ describe('updateWorkMetadata refresh merge semantics', { timeout: 10000 }, () =>
       scriptWriters: [],
       series: null,
     });
-  });
+  }, { timeout: 10000 });
 
   it('9. Refresh merge: after manual edit, refreshAll merges (title stays, VA additive)', async function () {
     // Simulate DLsite data

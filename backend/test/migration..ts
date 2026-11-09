@@ -2,9 +2,7 @@
 // There is no easy way to check verify that the schema after the migration is the same as the one created from scratch by createSchema()
 // Every time when I finish checking the schema I set dbVersion in schema.js to the number in the latest migration file
 
-// Prevent writing config files (side effect of config.js)
-process.env.FREEZE_CONFIG_FILE = '1';
-process.env.NODE_ENV='test';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';

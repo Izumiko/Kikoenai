@@ -93,14 +93,16 @@ const options: BuildOptions = {
  * Replace `to` with a copy of `from`, or report that the source is missing.
  * Skipping instead of failing keeps a backend-only build possible; the warning
  * is what tells the operator the deployment has no WebApp (or no placeholder
- * image).
+ * image). The previous copy is removed before the check: when the source is
+ * absent, keeping the stale copy would make the deployment serve a build this
+ * one did not produce.
  */
 const copyIntoBuild = (from: string, to: string, label: string): void => {
+  fs.rmSync(to, { recursive: true, force: true });
   if (!fs.existsSync(from)) {
     console.warn(` ! ${label} not found at ${from} -- skipping it.`);
     return;
   }
-  fs.rmSync(to, { recursive: true, force: true });
   fs.cpSync(from, to, { recursive: true });
 };
 

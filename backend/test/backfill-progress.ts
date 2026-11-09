@@ -1,6 +1,4 @@
-// Requiring the backfill script pulls in config + database/db; freeze the
-// config file so the test run never writes one, as edit-metadata.js does.
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';

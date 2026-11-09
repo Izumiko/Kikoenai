@@ -1,4 +1,4 @@
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';

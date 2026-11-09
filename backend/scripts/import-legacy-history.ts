@@ -24,7 +24,7 @@
  * What gets written, per (user, work):
  *   - `t_track_progress`: one row per matched track. seconds = play_time,
  *     completed = play_time >= 0.95 * duration (the threshold the player and
- *     scripts/backfill-progress.js already use).
+ *     scripts/backfill-progress.ts already use).
  *   - `t_play_history`: a `state` blob anchored on the most recently played
  *     track, with the queue rebuilt from that track's folder -- the same
  *     folder-scoped queue WorkTree builds and PUTs to /api/history. created_at
@@ -401,7 +401,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const oldDbPath = args.find(a => !a.startsWith('--'));
   if (!oldDbPath) {
-    console.error('Usage: node ./scripts/import-legacy-history.js <old-db.sqlite3> [--dry-run] [--overwrite] [--user <name>] [--map-user <old>=<new>]');
+    console.error('Usage: node ./scripts/import-legacy-history.ts <old-db.sqlite3> [--dry-run] [--overwrite] [--user <name>] [--map-user <old>=<new>]');
     process.exit(1);
   }
   const valueOf = (flag: string): string | null => {

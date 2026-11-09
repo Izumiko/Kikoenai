@@ -263,8 +263,15 @@ describe('bundled backend', () => {
     // Copied from static/ by scripts/build.ts; the cover fallback needs it.
     assert.equal(fs.existsSync(path.join(deployment, 'static', 'no-image.jpg')), true);
 
-    // dist/ is copied only when the frontend has been built (scripts/build.ts
-    // warns and skips it otherwise). When it exists, the copy must carry it.
+    // dist/ and static/ mirror their sources: copied when present and removed
+    // when absent (scripts/build.ts copyIntoBuild), so a copy an earlier build
+    // left never outlives the directory it came from. dist/ in particular is
+    // absent in a backend-only build, which only warns.
+    for (const dir of ['dist', 'static']) {
+      assert.equal(fs.existsSync(path.join(BUILD_DIR, dir)), fs.existsSync(path.join(BACKEND_DIR, dir)),
+        `build/${dir} should mirror backend/${dir}`);
+    }
+    // When the frontend has been built, the copy must carry it.
     if (fs.existsSync(path.join(BACKEND_DIR, 'dist'))) {
       assert.equal(fs.existsSync(path.join(deployment, 'dist', 'index.html')), true,
         'build/dist should carry the frontend build');

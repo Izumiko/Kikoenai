@@ -3,7 +3,7 @@
 // and the second did not, so the work page's file tree and its info panel
 // disagreed about the same position. These assert they cannot disagree again.
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';

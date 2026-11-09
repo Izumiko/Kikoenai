@@ -2,7 +2,7 @@
 // would break silently: the upload's Content-Length, the Content-Type that
 // picks the extension, and an overlay subtitle appearing in the listing.
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,13 +38,22 @@ describe('ASR client', () => {
   let realDispatcher: Dispatcher;
   let mockAgent: MockAgent;
   let pool: MockPool;
-  let seen: SeenRequest;
+  let seen: SeenRequest | undefined;
 
   // undici's mock dispatcher, so the suite needs no socket.
   const serve = (status: number, contentType: string | null, body: string, query = 'format=vtt') => {
+    // Cleared per call: a request the app never sends must not assert against
+    // whatever the previous test intercepted.
+    seen = undefined;
     pool.intercept({ path: `/transcribe?${query}`, method: 'POST' })
       .reply(status, (opts) => { seen = opts as unknown as SeenRequest; return body; },
         contentType ? { headers: { 'content-type': contentType } } : {});
+  };
+
+  /** The intercepted request, failing loudly when there was none. */
+  const observed = (): SeenRequest => {
+    assert.ok(seen, 'the ASR request should have been intercepted');
+    return seen;
   };
 
   before(() => {
@@ -88,11 +97,11 @@ describe('ASR client', () => {
     });
     // Required by the reference server; a stream body goes out chunked
     // without it.
-    assert.equal(seen.headers['content-length'], String(fs.statSync(audio).size));
+    assert.equal(observed().headers['content-length'], String(fs.statSync(audio).size));
     // Streamed, not buffered.
-    assert.equal(typeof seen.body.pipe, 'function');
+    assert.equal(typeof observed().body.pipe, 'function');
     // Only the extension matters on the far side.
-    assert.equal(seen.headers['x-filename'], 'x.mp3');
+    assert.equal(observed().headers['x-filename'], 'x.mp3');
   });
 
   it('passes the configured query string through untouched', async () => {
@@ -108,17 +117,18 @@ describe('ASR client', () => {
   it('defaults to asking for WebVTT', async () => {
     serve(200, 'application/x-subrip', 'x');
     await transcribe(audio);
-    assert.equal(seen.path, '/transcribe?format=vtt');
+    assert.equal(observed().path, '/transcribe?format=vtt');
   });
 
   it('sends no query string when one is configured empty', async () => {
     process.env.KIKO_ASR_QUERY = '';
+    seen = undefined;
     pool.intercept({ path: '/transcribe', method: 'POST' })
       .reply(200, (opts) => { seen = opts as unknown as SeenRequest; return 'x'; },
         { headers: { 'content-type': 'application/x-subrip' } });
 
     await transcribe(audio);
-    assert.equal(seen.path, '/transcribe');
+    assert.equal(observed().path, '/transcribe');
     delete process.env.KIKO_ASR_QUERY;
   });
 
@@ -166,7 +176,7 @@ describe('ASR client', () => {
     process.env.KIKO_ASR_API_KEY = 'sekrit';
     serve(200, 'application/x-subrip', 'x');
     await transcribe(audio);
-    assert.equal(seen.headers.authorization, 'Bearer sekrit');
+    assert.equal(observed().headers.authorization, 'Bearer sekrit');
     delete process.env.KIKO_ASR_API_KEY;
   });
 

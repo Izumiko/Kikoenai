@@ -14,7 +14,7 @@ updates:
     schedule:
       interval: weekly
 
-  # Tracks the node:24-alpine tags in the Containerfile
+  # Tracks the node:26-alpine tags in the Containerfile
   - package-ecosystem: docker
     directory: "/"
     schedule:

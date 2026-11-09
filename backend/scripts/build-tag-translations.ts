@@ -1,6 +1,6 @@
 // Preseed frontend/src/i18n/tags/{zh-CN,en-US,zh-TW}.json from DLsite's localized
 // genre lists. REQUIRES YOUR PROXY (127.0.0.1:1080 via config/config.json — the
-// same proxy build-tag-aliases.js uses).
+// same proxy build-tag-aliases.ts uses).
 //
 // Fetches the maniax (doujin R18) genre list in 4 locales, extracts
 // genre id -> localized name for each, and joins to the canonical Japanese key:

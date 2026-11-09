@@ -69,7 +69,10 @@ const skipDownload = process.env.KIKO_SKIP_DOWNLOAD === '1';
 function npm(args) {
   console.log('$ npm', args.join(' '));
   // On Windows npm is a .cmd shim, which Node can only spawn through a shell.
+  // cwd is pinned to the repo root: the workspace scripts (`build:prod`) must
+  // run there whatever directory the packager itself was invoked from.
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
+    cwd: ROOT,
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });

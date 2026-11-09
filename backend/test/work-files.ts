@@ -3,7 +3,7 @@
 // answer is kept -- it used to be t_work.memo, which is why these replace the old
 // work-memo.js. The invalidation key is mtime.
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';

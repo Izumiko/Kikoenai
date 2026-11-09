@@ -3,7 +3,7 @@
 // matters most: it is what keeps a paraphrasing or refusing model from putting
 // invented Japanese into the database.
 
-process.env.FREEZE_CONFIG_FILE = '1';
+// Env (FREEZE_CONFIG_FILE, NODE_ENV) comes from test/setup-env.ts, preloaded via --import.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

@@ -13,7 +13,7 @@
  * for debugging selector mismatches.
  */
 
-// Prevent writing config files (side effect of config.js)
+// Prevent writing config files (side effect of config.ts)
 process.env.FREEZE_CONFIG_FILE = '1';
 
 import path from 'path';
@@ -23,7 +23,7 @@ import type { ScrapedWorkMetadata } from '../types/scraper.ts';
 
 const args = process.argv.slice(2);
 
-// --no-proxy: ignore the proxy from config/config.json (scraper/axios.js
+// --no-proxy: ignore the proxy from config/config.json (scraper/axios.ts
 // reads it at module-load time, so clear it before importing the scraper).
 // The imports below are dynamic for exactly that reason: a static import would
 // be hoisted above this block and the scraper would capture the proxy first.
@@ -42,7 +42,7 @@ const dump = args.includes('--dump');
 const ids = args.filter((a) => !a.startsWith('--'));
 
 if (ids.length === 0) {
-  console.error('Usage: node scripts/test-fanza-scraper.js d215444 [dXXXXXX ...]');
+  console.error('Usage: node scripts/test-fanza-scraper.ts d215444 [dXXXXXX ...]');
   process.exit(1);
 }
 
