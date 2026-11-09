@@ -615,7 +615,7 @@ Both are non-fatal in the route: `db.updateWorkMetadata` has already committed b
 
 ## 3. Critical Conventions & Gotchas
 
-- **SQLite:** No concurrent writes. Busy timeout configured. Foreign keys enabled via `PRAGMA foreign_keys = ON` in `db.ts`.
+- **SQLite:** No concurrent writes. Foreign keys and the busy timeout are set per connection in the `afterCreate` hook in `database/knexfile.ts` (`PRAGMA foreign_keys = ON`, `PRAGMA busy_timeout = config.dbBusyTimeout`).
 - **Migrations:** Sequential, timestamp-prefixed files in `database/migrations/`. Run automatically on **every** startup via `knex-migrate.ts` (`init.ts`), on knex's own migration engine; `knex_migrations` records the executed ones, so only pending migrations run (idempotent — no version bump required for a migration to be picked up). The manifest in `database/migrations/index.ts` reports upstream's original `.js` filenames, so a database written by the CommonJS version never re-runs a migration and stays interchangeable with upstream. The app-version comparison in `init.ts` gates only the version-keyed upgrade tasks (`applyFix`/`fixMigrations` in `upgrade.ts`, `updateConfig`) — those must run **before** `up` because they can mark migrations as executed (`skipAll`). `dbVersion` in `schema.ts` must always equal the latest migration's timestamp prefix (asserted by `test/migration..ts`).
 - **Config write protection:** `setConfig()` always overwrites `production`, `md5secret`, `jwtsecret` with current values — these cannot be changed through the admin panel. (`jwtsecret` is now unused: sessions are opaque random strings, not signed tokens. It is retained only so the config file shape does not change.)
 - **Error handling:** auth failures are raised as an `Error` with `name = 'UnauthorizedError'` → 401 with `WWW-Authenticate` header. Missing DB tables → 500 with "数据库结构尚未建立". Production mode sanitizes error messages (no stack traces).
@@ -952,5 +952,5 @@ The frontend builds directly into `backend/dist/` (configured via `distDir` in `
 ## 10. Development Tips
 
 - **Config freezing:** Set `FREEZE_CONFIG_FILE=1` to prevent config file writes during testing.
-- **Docker:** Use `compose-example.yaml` with `IS_DOCKER=1` (sets the default paths).
+- **Docker:** `compose-example.yaml` runs the published image, which already sets `IS_DOCKER=true`, `NODE_ENV=production` and `KIKO_DATA_DIR=/appdata`; compose adds no environment overrides.
 - **Database path:** Controlled by `databaseFolderDir` in config, or `dbUseDefaultPath: true` (default).

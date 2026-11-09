@@ -36,7 +36,7 @@ file, as described below.
 | `backend/**/X.js` | `backend/**/X.ts` — same path, same basename |
 | `backend/eslint.config.js` | rewritten for ESM + `typescript-eslint`, but still plain `.js` — ESLint would need an extra loader (jiti) to read a TS config |
 | `backend/package.json` | `"type": "module"`, Node 26 engines, no native modules |
-| `frontend/**` | unchanged (plain JS/Vue, still built by Quasar) |
+| `frontend/**` | still plain JS/Vue built by Quasar, but **not byte-identical** — see the divergence table below |
 | `backend/test/**/X.js` | `backend/test/**/X.ts`; test names such as `test/migration..ts` keep upstream's odd spelling |
 | `backend/database/migrations/X.js` | `backend/database/migrations/X.ts` |
 | (none) | `backend/database/migrations/index.ts` — the static migration manifest |
@@ -46,19 +46,112 @@ A migration file is renamed, but the **name reported to knex keeps the original
 hold that name. `database/migrations/index.ts` does the renaming per entry and
 `database/knex-migrate.ts` feeds the list to knex as a custom migration source.
 
-Files that exist here but not upstream:
+### Files outside `backend/` that differ from upstream
 
-- `backend/app-dir.ts` — the deployment directory, replacing `__dirname`
-- `backend/tsconfig.json`
-- `backend/database/node-sqlite-client.ts` — knex client over `node:sqlite`
-- `backend/database/migrations/index.ts`
-- `backend/lib/load-env.ts`, `lib/limit-promise.ts`, `lib/url-join.ts`, `lib/uuid-v5.ts`
-  — local replacements for removed packages
-- `backend/types/*.ts`, `backend/types/*.d.ts` — shared types
-- `backend/scripts/build.ts` (esbuild bundler), `backend/scripts/freeze-config.ts`
-- `backend/test/setup-env.ts`, `test/node-sqlite-client.ts`, `test/migration-names.ts`,
-  `test/lib.ts`, `test/bundle-smoke.ts`
+The branch shares history with upstream (`0d3faa0` is an ancestor), so
+`git merge upstream/main` and `git cherry-pick` work normally. What does **not**
+work is dropping upstream files in wholesale: a few files outside `backend/`
+are locally modified for the TypeScript build. This is the complete list as of
+`0d3faa0..HEAD`; regenerate it with:
+
+```bash
+git diff --stat 0d3faa0..HEAD -- . ':!backend'
+```
+
+| File | What is local |
+|---|---|
+| `.containerignore` | rewritten for the two-stage Containerfile (excludes `backend/dist`, `backend/build`, runtime data, `scripts`, docs) |
+| `.github/workflows/build-debug.yml` | debug image built inside the Containerfile (`KIKO_DEBUG=1`), `workflow_dispatch` only |
+| `.github/workflows/build.yml` | production image built inside the Containerfile on Node 26 — no host Node step |
+| `.github/workflows/package-windows.yml` | Windows portable zip assembled on `ubuntu-latest` |
+| `.github/workflows/test.yml` | **new**: lint/typecheck/`node:test`, zip round-trip, frontend build, bundle smoke test |
+| `.gitignore` | ignores `/package/` (portable-zip output) |
+| `AGENTS.md` | root agent guide rewritten for the TypeScript layout and build (docs only) |
+| `Containerfile` | two-stage Node 26 build; the runtime stage ships only `backend/build/` |
+| `README.md` | fork install/build docs: TypeScript layout, new scripts, portable zip (docs only) |
+| `UPSTREAM.md` | **new**: this file |
+| `docs/superpowers/plans/2026-11-09-typescript-migration.md` | **new**: migration plan (docs only) |
+| `docs/superpowers/specs/2026-11-09-typescript-migration-design.md` | **new**: migration design spec (docs only) |
+| `frontend/AGENTS.md` | three backend `.ts` / test-command references (docs only) |
+| `frontend/package.json` | `@babel/preset-typescript` devDependency; `engines.node` `>= 26` |
+| `frontend/quasar.config.js` | requires `../backend/base-path.ts`; adds the `../backend` Babel TS loader rule |
+| `package-lock.json` | regenerated for the workspace/Node 26 changes — regenerate with `npm install`, never hand-merge |
+| `package.json` | `build:backend` / `build:prod` / `typecheck` / `test:package` scripts; `build` = frontend + bundle; `package:windows` → `scripts/package.js`; `engines.node` `>= 26` |
+| `scripts/build.sh` | builds frontend + backend bundle from the repo root |
+| `scripts/check-lyrics.mjs` | imports the backend `.ts` modules with dynamic `import()` |
+| `scripts/dev.sh` | starts both sides through the root workspace scripts (`node --watch`) |
+| `scripts/launchers/Kikoenai.bat` | launches `app\app.mjs`; the single-exe branch is gone |
+| `scripts/package.js` | rewritten portable-zip packager (stdlib only, writes the zip by hand) |
+| `scripts/package.test.mjs` | **new**: round-trip test for the zip writer/reader |
+| `scripts/pkg-package.js` | **deleted** (the `pkg` single-exe build) |
+
+#### Frontend build integration — do not take upstream's copy
+
+Two frontend files carry the integration with the backend TypeScript sources:
+
+- `frontend/quasar.config.js` requires `../backend/base-path.ts` (upstream:
+  `base-path` / `base-path.js`) and adds a `babel-loader` +
+  `@babel/preset-typescript` rule scoped to `../backend`, so `quasar build` can
+  import `backend/database/search-query.ts`.
+- `frontend/package.json` adds the `@babel/preset-typescript` devDependency and
+  raises `engines.node` to `>= 26`.
+
+Copying upstream's version of either file deletes that integration and the
+frontend build fails. So:
+
+1. **Whole release:** `git merge upstream/main` (or `git cherry-pick`), and on a
+   conflict in those files keep the local side, then port upstream's unrelated
+   changes into them by hand. `frontend/AGENTS.md` is docs only — keeping local
+   loses nothing there.
+2. **A single upstream patch:** apply it excluding the locally modified files,
+   then hand-port their hunks. Excluded paths are skipped silently, so look at
+   them separately first:
+
+   ```bash
+   git diff 0d3faa0..upstream/main -- frontend/quasar.config.js \
+                                      frontend/package.json \
+                                      frontend/AGENTS.md
+
+   git diff 0d3faa0..upstream/main -- frontend/ \
+     | git apply -3 \
+         --exclude=frontend/quasar.config.js \
+         --exclude=frontend/package.json \
+         --exclude=frontend/AGENTS.md
+   ```
+
+   A plain `git apply` of the whole frontend diff fails atomically at these
+   files, so nothing lands at all. `git apply -3` also stages what it applies.
+3. Never `git checkout upstream/main -- frontend/quasar.config.js
+   frontend/package.json`: it silently removes the `base-path.ts` require, the
+   TS loader rule and the Babel preset.
+
+### Files added by this fork (not in upstream)
+
+Outside `backend/`:
+
+- `.github/workflows/test.yml` — CI: lint/typecheck/`node:test`, zip test,
+  frontend build, bundle smoke test
+- `scripts/package.test.mjs` — zip writer/reader round-trip test
+- `docs/superpowers/plans/2026-11-09-typescript-migration.md` and
+  `docs/superpowers/specs/2026-11-09-typescript-migration-design.md` — the
+  migration plan and the design spec (authority for the backend changes)
 - `UPSTREAM.md` (this file)
+
+Inside `backend/`:
+
+- `app-dir.ts` — the deployment directory, replacing `__dirname`
+- `tsconfig.json`
+- `database/node-sqlite-client.ts` — knex client over `node:sqlite`
+- `database/migrations/index.ts` — the static migration manifest
+- `lib/load-env.ts`, `lib/limit-promise.ts`, `lib/url-join.ts`, `lib/uuid-v5.ts`
+  — local replacements for removed packages
+- `types/*.ts`, `types/*.d.ts` — shared types
+- `scripts/build.ts` (esbuild bundler), `scripts/freeze-config.ts`
+- `test/setup-env.ts`, `test/node-sqlite-client.ts`, `test/migration-names.ts`,
+  `test/lib.ts`, `test/bundle-smoke.ts`
+
+`scripts/pkg-package.js` went the other way: it was deleted, together with the
+`pkg` block in `backend/package.json`.
 
 ## Dependency substitutions
 
@@ -113,10 +206,11 @@ When porting an upstream change, walk this list:
 - **New CLI script** that a deployment must have (container image / Windows
   zip ship only `backend/build/`): add it to `ENTRY_POINTS` in
   `backend/scripts/build.ts`.
-- **New frontend file:** no action — the frontend stays plain JS.
+- **New frontend file:** apply it as upstream wrote it — the frontend stays
+  plain JS. Only the three files in the divergence table keep a local side.
 - **After porting:** run `npm test -w backend`, `npm run build` and
   `npm run test:bundle -w backend`, then update *Last synced upstream commit*
-  below.
+  at the top of this file.
 
 ## Example sync flow
 
@@ -130,10 +224,23 @@ git log --oneline 0d3faa0..upstream/main
 git log --oneline 0d3faa0..upstream/main -- backend/
 git diff 0d3faa0..upstream/main -- backend/database/queries.js
 
-# Frontend work touches no TypeScript: apply it directly
-git diff 0d3faa0..upstream/main -- frontend/ | git apply
-# or per commit:
-git cherry-pick <frontend-only-sha>
+# Frontend work is plain JS, but three files are locally modified (see the
+# divergence table). A plain `git apply` of the whole frontend diff fails
+# atomically there, so look at those hunks separately, then apply the rest:
+git diff 0d3faa0..upstream/main -- frontend/quasar.config.js \
+                                   frontend/package.json \
+                                   frontend/AGENTS.md
+git diff 0d3faa0..upstream/main -- frontend/ \
+  | git apply -3 \
+      --exclude=frontend/quasar.config.js \
+      --exclude=frontend/package.json \
+      --exclude=frontend/AGENTS.md
+
+# Whole-release alternative: merge/cherry-pick, keep the local side in those
+# files, then re-apply upstream's unrelated edits to them by hand.
+git merge upstream/main
+# or:
+git cherry-pick <sha>
 ```
 
 For a whole upstream release, `git merge upstream/main` is fine as a starting

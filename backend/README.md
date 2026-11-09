@@ -32,7 +32,7 @@ npm start
 PWA的优点：基本页面零延迟，可以像手机APP一样通过浏览器“添加到桌面”的方式安装成App。作者自己使用的前端版本。  
 缺点：更新新版本时需要至少多刷新一次。  
 
-本项目还有打包好的 **Windows 便携压缩包**（`npm run package:windows` 生成，内含 Node 运行时、`build/` 产物与 ffmpeg）与 **docker 镜像**版本，docker 镜像及 compose 的使用说明详见[**用户文档**](https://github.com/umonaca/kikoeru-express/wiki/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E)  
+本项目还有打包好的 **Windows 便携压缩包**（在仓库根目录执行 `npm run package:windows` 生成，内含 Node 运行时、`build/` 产物与 ffmpeg）与 **docker 镜像**版本，docker 镜像及 compose 的使用说明详见[**用户文档**](https://github.com/umonaca/kikoeru-express/wiki/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E)  
 使用 compose 时只需调整 `compose-example.yaml` 内的挂载位置以符合您的存储路径即可。
 
 ### 技术栈
