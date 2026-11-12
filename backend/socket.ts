@@ -1,6 +1,6 @@
 import path from 'path';
 import { Server } from 'socket.io';
-import cookie from 'cookie';
+import { parseCookie } from 'cookie';
 import child_process from 'child_process';
 import type { ChildProcess } from 'child_process';
 import type { Server as HttpServer } from 'http';
@@ -52,7 +52,7 @@ const initSocket = (server: HttpServer | HttpsServer) => {
     io.use((socket, next) => {
       // The session id is in an HttpOnly cookie, which the browser attaches
       // to the same-origin handshake automatically.
-      const cookies = cookie.parse(socket.handshake.headers.cookie || '');
+      const cookies = parseCookie(socket.handshake.headers.cookie || '');
       const secret = cookies[SESSION_COOKIE];
 
       if (!secret) {
