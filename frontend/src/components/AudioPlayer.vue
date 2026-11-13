@@ -4,12 +4,10 @@
     <!-- 播放器 -->
     <div>
       <q-card 
-        class="fixed-bottom-right box-shadow audio-player" 
+        class="fixed-bottom-right audio-player" 
         @mousewheel.prevent 
         @touchmove.prevent
-        color="primary"
         :class="{showStyle: showAudioPlayer, hideStyle: !showAudioPlayer}"
-        :style="{'--cover-url': `url(${coverUrl})`}"
       >
         <!--顶部小横条-->
         <div class="pull-handler" @click="toggleHide" v-touch-swipe.mouse.down="toggleHide"></div>
@@ -19,21 +17,22 @@
           v-touch-swipe.mouse="onCoverSwipe"
         >
           <q-img fit="contain"
-            class="rounded-borders box-shadow cover-img"
+            class="rounded-borders cover-img"
             :img-style="{
               transition: 'opacity 1s, filter 1s',
             }"
             transition="fade"
             :src="coverUrl"
             :ratio="4/3"
-            @dblclick.prevent="openWorkDetail()"
+            @click.prevent="openWorkDetail()"
           >
           </q-img>
 
         </div>
 
         <!-- 设置菜单 -->
-        <div class="row justify-between q-mr-sm q-my-sm">
+        <div class="row justify-between q-mr-sm q-my-sm relative-position">
+          <SeekUndoPill class="panel-seek-undo" />
           <!-- 顶在前面 -->
             <!-- 曲目列表 -->
             <q-btn 
@@ -77,18 +76,17 @@
                 {{ sleepTimerTooltip }}
               </q-tooltip>
             </q-btn>
-
-            <!--大屏幕-->
-            <q-btn 
-              flat 
-              dense 
-              size="md" 
-              padding="none sm" 
-              :icon="isFullScreenPage ? 'fullscreen_exit' : 'fullscreen'"
-              @click="gotoFullScreenPlayer"
+            <!--fullscreen lyrics-->
+            <q-btn
+              flat
+              dense
+              size="md"
+              padding="none sm"
+              icon="open_in_full"
+              @click="openLyricsFullScreen()"
             >
               <q-tooltip anchor="top middle" self="bottom middle">
-                {{ t('audioplayer.fullscreen') }}
+                {{ t('lyricsfullscreen.open') }}
               </q-tooltip>
             </q-btn>
 
@@ -104,49 +102,6 @@
                 {{ t('audioplayer.moreSettings') }}
               </q-tooltip>
               <q-menu anchor="bottom right" self="top right">
-                <q-item clickable v-ripple @click="openWorkDetail()" v-close-popup>
-                  <q-item-section avatar>
-                    <!-- placeholder -->
-                  </q-item-section>
-                  <q-item-section>
-                    {{ t('audioplayer.openWorkDetail') }}
-                  </q-item-section>
-                </q-item>
-
-                <q-item v-if="hasLyric">
-                  <q-item-section>
-                    <q-input
-                      v-if="hasLyric"
-                      :model-value="lyricOffsetSeconds"
-                      @update:model-value="lyricOffsetChange"
-                      type="number"
-                      :prefix="t('audioplayer.lyricOffset')"
-                      suffix="s"
-                      style="max-width: 100%;"
-                      outlined
-                      clearable
-                      input-style="text-align: right;"
-                    >
-                      <template v-slot:before>
-                          <q-btn size="sm" padding="md xs" icon="sync_alt" @click="lyricSyncDialog = true"></q-btn>
-                      </template>
-                      <template v-slot:append>
-                        <div class="column">
-                          <q-btn
-                            size="xs"
-                            icon="arrow_drop_up"
-                            @click="lyricOffsetChange(lyricOffsetSeconds + 0.1)"
-                          ></q-btn>
-                          <q-btn
-                            size="xs"
-                            icon="arrow_drop_down"
-                            @click="lyricOffsetChange(lyricOffsetSeconds - 0.1)"
-                          ></q-btn>
-                        </div>
-                      </template>
-                    </q-input>
-                  </q-item-section>
-                </q-item>
 
                 <q-item>
                   <q-item-section>
@@ -198,8 +153,9 @@
         </div>
 
         <!-- 音量控件 -->
-        <!-- HTML5 volume in iOS is read-only -->
-        <div class="row items-center q-mx-lg" style="height: 50px" v-if="!$q.platform.is.ios">
+        <!-- Phones adjust volume with the hardware keys, and iOS's media volume is
+             read-only from script in any case. -->
+        <div class="row items-center q-mx-lg" style="height: 50px" v-if="$q.platform.is.desktop">
           <q-icon name="volume_down" size="sm" class="col-auto" />
           <q-slider v-model="volume" :min="0" :max="1" :step="0.01" class="col q-mx-md"/>
           <q-icon name="volume_up" size="sm" class="col-auto" />
@@ -215,8 +171,8 @@
       <q-card class="current-play-list">
         <!-- 操作当前播放列表的控制按钮 -->
         <div class="row" style="padding: 5px; height: 45px;">
-          <q-btn dense round size="md" icon="edit" color="primary" @click="editCurrentPlayList = !editCurrentPlayList" style="height: 35px; width: 35px;" class="col-auto" />
-          <q-btn dense round size="md" icon="save" color="secondary" style="height: 35px; width: 35px;" class="col-auto q-mx-sm" @click="editCurrentPlayList = false" />
+          <q-btn dense round size="md" icon="edit" color="primary" text-color="on-primary" @click="editCurrentPlayList = !editCurrentPlayList" style="height: 35px; width: 35px;" class="col-auto" />
+          <q-btn dense round size="md" icon="save" color="secondary" text-color="on-secondary" style="height: 35px; width: 35px;" class="col-auto q-mx-sm" @click="editCurrentPlayList = false" />
           <q-space />
         </div>
         
@@ -237,7 +193,7 @@
               :data-id="index"
             >
               <q-item-section side v-show="editCurrentPlayList">
-                <q-icon name="clear" :color="queueIndex === index ? 'white' : 'red'" @click="removeFromQueue(index)" />
+                <q-icon name="clear" :color="queueIndex === index ? 'on-primary' : 'negative'" @click="removeFromQueue(index)" />
               </q-item-section>
 
               <q-item-section avatar>
@@ -253,32 +209,6 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="lyricSyncDialog"  seamless position="top">
-      <q-card class="bg-primary text-white">
-        <q-card-section>
-          <div class="text-h6">{{ t('audioplayer.lyricSyncTitle') }}</div>
-        </q-card-section>
-
-        <q-card-section class="q-pt-none">
-          {{ t('audioplayer.lyricSyncDesc') }}
-        </q-card-section>
-
-        <q-card-section v-if="fixState === 'ready'">
-          <q-btn @click="startFixLyricSync('lyric')">{{ t('audioplayer.lyricFirst') }}</q-btn>
-          <q-btn @click="startFixLyricSync('audio')">{{ t('audioplayer.audioFirst') }}</q-btn>
-        </q-card-section>
-
-        <q-card-section v-if="fixState === 'measure'">
-          <q-btn @click="stopFixLyricSync">{{ fixWhoStartFirst == 'audio' ? t('audioplayer.lyricAppeared') : t('audioplayer.audioHeard') }}</q-btn>
-        </q-card-section>
-
-        <q-card-actions align="right">
-          <q-btn @click="lyricSyncDialog = false">{{ t('common.close') }}</q-btn>
-          <q-btn v-if="fixState !== 'ready'" @click="fixState = 'ready'" >{{ t('audioplayer.remeasureOffset') }}</q-btn>
-          <q-btn v-if="fixState === 'done'" @click="fixApply">{{ t('audioplayer.applyOffset', { delta: showDeltaSeconds }) }}</q-btn>
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
   </div>
 </template>
 
@@ -287,6 +217,7 @@ import { useI18n } from 'vue-i18n'
 import AudioElement from 'components/AudioElement'
 import Scrollable from 'components/Scrollable'
 import SleepMode from 'components/SleepMode'
+import SeekUndoPill from 'components/SeekUndoPill'
 import { mapState, mapGetters, mapMutations } from 'vuex'
 import { formatSeconds } from '../utils'
 import { sendOrQueue, requestSync } from '../utils/outbox'
@@ -307,24 +238,17 @@ export default {
     AudioElement,
     Scrollable,
     SleepMode,
+    SeekUndoPill,
   },
 
   data () {
     return {
-      showCurrentPlayList: false,
       showSleepTimer: false,
       editCurrentPlayList: false,
       queueCopy: [],
       isAndroid: navigator.userAgent.toLowerCase().indexOf('android') > -1,
       historyCheckIntervalId: -1,
       latestUpdatedHistory: null, // 记录最近一次更新的历史记录，防止反复对同一个播放历史进行远程数据更新
-
-      // 歌词偏移量修复工具
-      lyricSyncDialog: false,
-      fixState: "ready",  // ready: 准备开始, measure: 计时进行中, done: 计时完成
-      fixWhoStartFirst: "", // "audio", "lyric" // 先看到的歌词，还是先听到的声音
-      fixStartMills: 0,
-      fixStopMills: 0,
     }
   },
 
@@ -397,9 +321,6 @@ export default {
         this.onUpdatePlayingStatus()
       }
     },
-    lyricSyncDialog() {
-      this.fixState = 'ready';
-    }
   },
 
   computed: {
@@ -407,8 +328,11 @@ export default {
       return this.currentPlayingFile.trackId && !this.hide;
     },
 
-    isFullScreenPage () {
-      return this.$route.path.startsWith('/fullScreenPlayer');
+    // The play list is shared state: the docked bar's queue button opens the
+    // same dialog this card does.
+    showCurrentPlayList: {
+      get () { return this.queueDialogOpen },
+      set (value) { this.setQueueDialog(value) },
     },
 
     coverUrl () {
@@ -520,17 +444,6 @@ export default {
       }
     },
 
-    fixDeltaMills() {
-      // 音频先出现的话，需要将offset增加，使得歌词提前出现
-      let sign = this.fixWhoStartFirst == 'audio' ? +1 : -1;
-      return sign * (this.fixStopMills - this.fixStartMills);
-    },
-    showDeltaSeconds() {
-      const epsilon = 1;
-      if (Math.abs(this.fixDeltaMills) < epsilon) return ""
-      return `${this.fixDeltaMills > 0 ? '+': ''}${(this.fixDeltaMills/1000).toFixed(2)}s`;
-    },
-
     ...mapState('AudioPlayer', [
       'playing',
       'hide',
@@ -548,7 +461,8 @@ export default {
       'rewindSeekMode',
       'forwardSeekMode',
       'hasLyric',
-      'lyricOffsetSeconds',
+      'showLyrics',
+      'queueDialogOpen',
       'visualPlayerCoverUrl',
       'flipLRChannel',
     ]),
@@ -562,22 +476,10 @@ export default {
   methods: {
     formatSeconds,
 
-    startFixLyricSync(whoStartFirst) {
-      this.fixState = "measure";
-      this.fixWhoStartFirst = whoStartFirst;
-      this.fixStartMills = this.fixStopMills = performance.now();
-    },
-
-    stopFixLyricSync() {
-      this.fixState = "done"; // 计时结束，重制状态
-      this.fixStopMills = performance.now();
-    },
-
-    fixApply() {
-      this.lyricOffsetChange(this.fixDeltaMills / 1000);
-      this.lyricSyncDialog = false;
-      this.fixState = "ready";
-      this.$q.notify({message: this.t('audioplayer.lyricOffsetApplied', { delta: (this.fixDeltaMills/1000).toFixed(2) }), timeout: 500})
+    // The overlay is inset against the docked bar, so the mutation also leaves
+    // panel mode; this closes the card as it opens the lyrics.
+    openLyricsFullScreen() {
+      this.setLyricsFullScreen(true)
     },
 
     ...mapMutations('AudioPlayer', {
@@ -589,7 +491,8 @@ export default {
       setVolume: 'SET_VOLUME',
       rewind: 'SET_REWIND_SEEK_MODE',
       forward: 'SET_FORWARD_SEEK_MODE',
-      setLyricOffsetSeconds: 'SET_LYRIC_OFFSET_SECONDS',
+      setQueueDialog: 'SET_QUEUE_DIALOG',
+      setLyricsFullScreen: 'SET_LYRICS_FULL_SCREEN',
     }),
     ...mapMutations('AudioPlayer', [
       'SET_TRACK',
@@ -750,21 +653,6 @@ export default {
       return due
     },
 
-    gotoFullScreenPlayer() {
-      if (this.isFullScreenPage) {
-        this.$router.push(`/work/${this.playWorkId}`)
-      } else {
-        this.$router.push('/fullScreenPlayer')
-      }
-    },
-
-    lyricOffsetChange(seconds) {
-      if (seconds == null) seconds = 0;
-      seconds = Math.round(seconds * 10000) / 10000; // 解决javascript小数点精度问题，比如0.9+0.1变成0.999999这种问题，在这里修复成1.0
-      console.log("lyric offset change to ", seconds, typeof seconds)
-      this.setLyricOffsetSeconds(seconds)
-    },
-
     onFlipLRChannelChange(value) {
       this.$store.commit('AudioPlayer/SET_FLIP_LR_CHANNEL', value)
     },
@@ -783,9 +671,12 @@ export default {
         case "PageDown": this.nextTrack(); break;
         case "PageUp": this.previousTrack(); break;
 
-        case "ArrowUp": 
+        // Volume has no UI on phones, so the shortcut stays desktop-only.
+        case "ArrowUp":
+          if (!this.$q.platform.is.desktop) return;
           this.volume = Math.min(1.0, this.volume + volumeStep); break;
-        case "ArrowDown": 
+        case "ArrowDown":
+          if (!this.$q.platform.is.desktop) return;
           this.volume = Math.max(0.0, this.volume - volumeStep); break;
         default: return; // return now
       }
@@ -810,9 +701,17 @@ export default {
 
 
 <style lang="scss" scoped>
-.box-shadow {
-  box-shadow: black 0px 4px 8px;
+/* Inside the card, right-aligned, just above the seek row. It is anchored to the
+   settings row because that row sits between the artwork and the seek bar: the
+   pill then covers artwork instead of the row's trailing buttons. */
+.panel-seek-undo {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 4px;
+  z-index: 1;
 }
+
 
 .audio-player {
 
@@ -820,7 +719,7 @@ export default {
   @media (min-width: $breakpoint-sm-min) {
     width: 330px;
     margin: 0px 10px 10px 0px;
-    border-radius: 8px;
+    border-radius: var(--md-sys-shape-corner-medium);
   }
 
   // 宽度 < $breakpoint-xs-max (599px)
@@ -828,6 +727,7 @@ export default {
     width: 100%;
     height: 100%;
     border-radius: 0;
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   transition: 0.6s;
@@ -836,20 +736,11 @@ export default {
   /* flex布局，让封面占据主要空间，其余空间留给其他控件 */
   display: flex;
   flex-direction: column;
-}
 
-.audio-player::before {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  content: "";
-  background-image: var(--cover-url);
-  background-position: 50% 50%;
-  background-size: contain;
-  background-repeat: repeat;
-  filter: blur(30px) brightness(0.7); // blur bigger than 80 will cause safari wrong render result
+  /* Material 3 surface token instead of Quasar's flat `#fff` (light) and
+     `--q-dark` (dark): the card follows the theme in both schemes and in every
+     contrast tier, and matches the surfaces the rest of the player UI uses. */
+  background: rgb(var(--surface-container-high-rgb));
 }
 
 .hideStyle {
@@ -888,7 +779,10 @@ export default {
 .pull-handler {
   height: 6px;
   width: 100px;
-  background: rgba(255, 255, 255, 0.3);
+  /* Drawn in the theme's own contrast colour: the card has no artwork behind it
+     any more, so a hardcoded white handle is invisible on the light (white)
+     card. */
+  background: rgb(var(--on-surface-variant-rgb) / 0.4);
   position: absolute;
   border-radius: 4px !important;
   overflow: hidden;
@@ -898,7 +792,7 @@ export default {
 }
 
 .pull-handler:hover {
-  background: rgba(255, 255, 255, 0.5);
+  background: rgb(var(--on-surface-variant-rgb) / 0.6);
 }
 
 .audio-name {

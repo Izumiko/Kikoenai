@@ -17,7 +17,7 @@ This is the Quasar-based frontend PWA; the Express API server lives in sibling p
 ```
 ├── src/
 │   ├── App.vue                           # Root component
-│   ├── index.template.html               # HTML template
+│   ├── index.html                        # HTML template (this one, not src/index.template.html)
 │   ├── utils.js                          # Shared utility functions
 │   ├── material-theme.json               # Generated Material color tokens (see scripts/generate-theme.mjs)
 │   ├── utils/
@@ -64,21 +64,22 @@ This is the Quasar-based frontend PWA; the Express API server lives in sibling p
 │   │   ├── List.vue                      # Generic list (circles, tags, VAs)
 │   │   ├── Login.vue                     # Login page
 │   │   ├── Favourites.vue                # Favorites, history, progress
-│   │   ├── FullScreenPlayer.vue          # Full-screen player mode
 │   │   ├── TextViewer.vue                # In-app text file viewer (route /text/:trackId)
 │   │   ├── Downloads.vue                 # Offline library: manifest grouped by work, rendered with WorkCard/WorkListItem (grid/list toggle, sort), storage quota, play-all, per-work/per-track remove
+│   │   ├── Settings.vue                  # Per-user settings (theme, language, tag language, player prefs) — route /settings, in MainLayout
 │   │   ├── Error404.vue                  # 404 page
 │   │   └── Dashboard/
 │   │       ├── Folders.vue               # Library folder management
 │   │       ├── Scanner.vue               # Scan controls + progress
 │   │       ├── Advanced.vue              # Advanced settings
-│   │       ├── Settings.vue              # General settings
 │   │       └── UserManage.vue            # User management (admin)
 │   ├── components/
 │   │   ├── AudioPlayer.vue               # Main audio player (floating panel)
 │   │   ├── AudioElement.vue              # Playback engine: hidden <audio> + Plyr + mediaSession
-│   │   ├── PlayerBar.vue                 # Mini player bar (bottom of screen)
-│   │   ├── LyricsBar.vue                 # Lyrics display below player
+│   │   ├── PlayerBar.vue               # Docked three-row player bar (mounted; see §2.5)
+│   │   ├── LyricsBar.vue                 # Floating lyric window above the bar (see §2.9)
+│   │   ├── LyricsFullScreen.vue          # Full-screen scrolling lyrics overlay (see §2.9)
+│   │   ├── SeekUndoPill.vue              # "Back to mm:ss" pill after a seek-bar jump
 │   │   ├── WorkCard.vue                  # Work card (grid mode); `oldStyle` prop switches to the legacy look; optional `coverUrl` prop overrides the cover source
 │   │   ├── WorkListItem.vue              # Work list item (list mode); optional `coverUrl` prop + `side` slot for trailing actions
 │   │   ├── WorkDetails.vue               # Work detail panel (metadata, review, rating; opens EditMetadata for admins)
@@ -148,7 +149,7 @@ Three route groups:
 
 | Route | Layout | Description |
 |-------|--------|-------------|
-| `/admin` | `DashboardLayout` | Admin dashboard (folders, scanner, advanced, settings, user mgmt) |
+| `/admin` | `DashboardLayout` | Admin dashboard (folders, scanner, advanced, user mgmt). Only reachable from the drawer for admins — see §2.2a |
 | `/` | `MainLayout` | Main app with persistent audio player at bottom |
 | `/login` | None | Standalone login page |
 
@@ -159,8 +160,8 @@ Main layout routes:
 | `/` | `works` | Works | Media library (grid/list, sort, filter, search) — this is the real route |
 | `/works` | — | redirect→`/` | Legacy path, redirects to `/` preserving query. Deliberate: the reverse direction caused a `replaceState` loop that broke back navigation |
 | `/work/:id` | — | Work | Work detail + track list. The browsed folder is in the query: `?path=foo/bar` (slash-joined folder names — a slash cannot occur in a folder name, so nothing needs escaping) plus the `#work-tree` anchor, and an open image preview adds `&img=<filename>`, so walking into a folder or opening an image is a history entry and Back goes up one level / closes the preview instead of leaving the work. Paging through images `replace`s rather than pushes, so a folder of 200 images does not need 200 Backs. `Work.vue` therefore watches `$route.params.id`, not `$route` — a query change must not refetch |
-| `/fullScreenPlayer/:id?` | — | FullScreenPlayer | Full-screen player mode |
 | `/text/:trackId(.*)` | — | TextViewer | In-app viewer for `.txt`/`.lrc`/`.srt`/`.ass`/`.vtt`. The param spans slashes because `trackId` is `${workId}/${relPath}`, and a relPath may itself contain subdirectories. Never link to `/api/media/stream/...` directly — a real navigation kills the SPA document (playback stops) and in an installed PWA back exits the app |
+| `/settings` | — | Settings | Per-user settings: theme, UI language, tag language, and the player/card preferences (`AudioPlayer` Vuex state). Rendered inside `MainLayout`; `/admin/settings` redirects here. The old admin-dashboard copy of this page was removed, so the only general-settings page is this one |
 | `/circles` | — | List | Browse by circle (artist group) |
 | `/tags` | — | List | Browse by tag |
 | `/vas` | — | List | Browse by voice actor |
@@ -172,6 +173,10 @@ Main layout routes:
 | `/:pathMatch(.*)*` | — | Error404 | Catch-all, appended unless `MODE === 'ssr'` |
 
 The `/favourites/*` children are generated by the `prefixRoutes` helper at the top of `routes.js`; each one renders the same `Favourites` page with different `props`.
+
+### 2.2a Drawer entries and admin gating
+
+The `MainLayout` drawer is built from a `links` array rendered through `getLinks()`, which drops an entry when `adminOnly` is set and the user is not an admin (`isAdmin`: auth disabled, `User.group === 'administrator'`, or `name === 'admin'` — the same rule `WorkDetails.vue` uses) and when `Full Screen` has no work to open. So **`Settings` (`/settings`) is for everyone and `Admin` (`/admin`) only renders for admins**; the admin dashboard's own drawer entry list lives in `DashboardLayout.vue` and intentionally contains no general-settings page any more. This hides the button only — `/admin` is not route-guarded, and the admin APIs behind it are the actual enforcement (`GET/PUT /api/config/admin` and the admin-only Socket.IO handshake).
 
 **Key detail:** The `Works` and `Favourites` pages are kept alive via `<keep-alive :include="['Works', 'Favourites']">` in `MainLayout`, preserving the loaded list and scroll position when navigating back. The cost is that neither page refetches on return, so a review/progress change made on a work page is not reflected in a cached list until something calls `reset()`.
 
@@ -248,6 +253,7 @@ Unlike `AudioPlayer`/`User`, has no real actions (matches the existing conventio
 | `i18n.js` | `src/boot/i18n.js` | Registers `vue-i18n`, syncs the Quasar lang pack and `<html lang>` to the current locale, exports `changeLanguage(locale)` / `changeTagLanguage(locale)` (tag-name translation moved to the `useTagTranslate()` composable) |
 | `store.js` | `src/boot/store.js` | Initializes Vuex store |
 | `contrast.js` | `src/boot/contrast.js` | Contrast-ratio helpers for picking theme-aware text colors (`src/utils/contrast.js`) |
+| `theme.js` | `src/boot/theme.js` | Applies the saved theme preference (LocalStorage `theme_mode` → Quasar `Dark.set`, `src/utils/theme.js`) |
 | `plyr.js` | `src/boot/plyr.js` | Imports Plyr + its CSS, exposes the `Plyr` class as `$Plyr` (no component is registered) |
 | `socket.io.js` | `src/boot/socket.io.js` | Creates Socket.IO client (autoConnect: false); exposes `$socket` globally |
 
@@ -257,20 +263,23 @@ The audio player is a multi-component system fixed at the bottom of `MainLayout`
 
 ```
 MainLayout
-├── PlayerBar        # Mini bar (always visible at bottom)
-├── AudioPlayer      # Floating panel (toggle-able, shows cover + controls)
+├── PlayerBar      # Docked bar (always visible at bottom when a track plays)
+├── AudioPlayer      # The phone's card (cover + controls)
 │   └── AudioElement # The actual playback engine (hidden <audio> + Plyr + mediaSession)
-└── LyricsBar        # Lyrics display (below player)
+├── LyricsBar        # Floating lyric window above the docked bar
+└── LyricsFullScreen # Full-screen scrolling lyrics, inset above the bar
 ```
 
-- **AudioPlayer.vue** — Floating card at bottom-right with cover art, track controls, seek bar, volume, playback mode. Presentational only: it renders `AudioElement` and drives it through Vuex.
+- **AudioPlayer.vue** — The phone's player card (full screen under 600px; `openPanel()` refuses on a wide screen). Cover, controls, seek, volume (desktop only — phones use the hardware keys and iOS's media volume is read-only), play mode, and `open_in_full` for `LyricsFullScreen`, which also leaves panel mode and so closes the card. Its `⋯` holds the L/R channel toggle and "open work details"; the lyric-offset editor and its sync helper were removed, so nothing sets `lyricOffsetSeconds` any more (the sampling and overlay code still reads it, at 0). Presentational: it renders `AudioElement` and drives it through Vuex.
 - **AudioElement.vue** — The playback engine, and the only component that touches the media element. Holds a `display:none` `<audio crossorigin>` with `Plyr` instantiated on it directly (`controls: ['progress']`); Plyr's own UI is never shown, so it acts purely as an event/property façade over the native element. Also owns:
   - `navigator.mediaSession` metadata and lock-screen action handlers (`updateMediaSessionMetadata`), which map play/pause/next/prev/seek back onto Vuex mutations.
   - Optional L/R channel swap (`applyFlipLRChannel`) via a WebAudio `createMediaElementSource → ChannelSplitter → ChannelMerger → destination` graph. `createMediaElementSource` is a one-way door — once called, that `AudioContext` owns the element's output permanently — so the graph is built lazily on first use and only *rewired* on toggle, never torn down until unmount.
   - **Background playback (Android):** `ended` is bound as a direct native listener on the media element, *not* `player.on('ended')` — Plyr proxies the same native event, and registering both advanced the queue two tracks at a time. The next track's source is loaded imperatively (`_loadSource`) **synchronously inside the `ended` handler**, because Chrome freezes hidden pages and the `nextTick`-deferred `source` watcher can lag by minutes. `_loadSource` compares `media.currentSrc` and no-ops when the watcher later fires with the same URL. Do not reintroduce a `<source :src>` binding here; see commit `6fb856c`.
   - **Lyric changes are scheduled to their cue times (§3).** `setLyricStreams` precomputes `_lyricBoundaries`: the sorted union of every cue `start` and every finite cue `end` across all streams, i.e. every instant at which `cueTextAt` can return something different. `sampleLyrics()` publishes the current frame through `SET_CURRENT_LYRICS` and then arms **one `setTimeout`** for the next boundary (`_scheduleLyricSample`), measured in media time (`(next - now) / playbackRate`) and disarmed while paused, ended, stalled or hidden. Its callback re-samples and re-arms, so a timer that fired late (coalesced by the OS, or behind a long task) corrects itself instead of accumulating error. Every other caller — `onTimeupdate`, `seeked`, `onPause`, `onPlaying`, `ratechange`, `visibilitychange`, the `lyricOffsetSeconds` watcher — just calls `sampleLyrics()`, which leaves the schedule correct as a side effect. `timeupdate` (~4x/s) is only a backstop that heals anything the OS swallowed; it publishes nothing unless the text actually changed.
-- **PlayerBar.vue** — Compact mini-bar always visible when a track is playing (contains basic controls).
-- **LyricsBar.vue** — Draggable, resizable lyric bar. Renders one coloured line per lyric stream, stacked (§2.9); parsing and playback sync live in `AudioElement.vue`.
+- **PlayerBar.vue** — The bar mounted today: full-bleed 128px (84px under 600px), three rows, transport centred, up to seven actions. `MainLayout` keeps `.padding-bottom-play-bar` in step with its height. The transport shows the current time on the left and the total on the right. Because the transport is centred, the cluster thins out as the window narrows: play mode and the sleep timer move into `⋯` below 1024px (`narrow`), the times drop below 900px and the seek buttons below 800px. Tapping or swiping the bar opens the panel on phones only; `⋯` entries appear only while their button is off the bar. The queue button opens the **play list dialog**, not the panel — its flag is shared state (`queueDialogOpen`) because the dialog lives in `AudioPlayer`. Volume is desktop-only: a button on the bar from 1024px up, and the same slider in `⋯` below that (`volumeInMenu`) — never on phones, which have hardware keys. The L/R channel swap is always a checkable `⋯` entry, at every width. `hide` follows `matchMedia('(min-width: 600px)')` via `SET_HIDE`.
+- **SeekUndoPill.vue** — "Back to 12:34" after a seek-bar jump, plus the hollow ghost handle it draws on both seek bars (`useSeekUndo()`, one shared 500 ms clock). **Only the seek bar arms it**: the rail (`seekTo`) and the panel's **`q-slider`** (`onChangeSlider` — not Plyr's progress control, which is `display: none`). The ±seconds buttons, `←`/`→` and lyric rows never arm it, and a jump within 1 s of the current position is ignored. One window, one memory: `ARM_SEEK_UNDO` keeps the first target only while the pill is up (30 s), so a run of scrubbing returns to where the run started and a jump after it has faded starts a new run. Visibility is derived from `seekUndo.at`, never a flag plus a `setTimeout` that a newer seek could outrun.
+- **LyricsBar.vue** — Draggable lyric window: one coloured line per stream, stacked (§2.9). Default spot is 132px above the bottom; in panel mode the baseline is placed just above the card's artwork, because settings, seek, transport and volume all sit below it. Measure that with layout metrics (`offsetTop`/`offsetHeight` plus the card's `marginBottom`), never `getBoundingClientRect` — the card slides with `translateY`, and a rect read off-screen or mid-slide pushes the window past the bottom edge. The dragged position is component data bound as a style: the element is destroyed whenever the lyrics go quiet, so a DOM-only position would be lost.
+- **LyricsFullScreen.vue** — Full-screen lyric view (§2.9). An overlay, not a route: `fixed`, inset `0 0 128px 0` (`84px` under 600px), `z-index: 3050` — below the bar's `3100` on purpose, so the bar stays visible and keeps owning playback. Follows the active line at 38% of its height; clicking a row seeks to that row's start. Opening it forces `hide = true` (the inset is measured against the bar) and closes the drawer so the bar gets the full width. It is independent of the CC toggle and of whether the track has lyrics: with nothing to draw it is simply blank, so neither button closes or disables the other.
 - Configuration like seek times, L/R channel flip, and auto-mark-listened are persisted in `LocalStorage` (keys are exported from `store/module-AudioPlayer/state.js`).
 
 ### 2.6 Communication with Backend
@@ -357,7 +366,7 @@ sub-path install would otherwise register a worker that controls nothing.
 
    `_advanceIfAtEndOfTrack` zeroes `currentTime` before advancing, since it still describes the finished track. On the last track there is nothing to advance to, so it rewinds to 0 instead of leaving the element ended, which Firefox answers by stopping.
 
-5. **Dark Mode:** Toggled via Quasar's `Dark` plugin, persisted in browser across sessions.
+5. **Dark Mode:** Quasar's `Dark` plugin. The three-way choice (follow system / light / dark) lives in `pages/Settings.vue` and is persisted in LocalStorage `theme_mode` by `src/utils/theme.js`; `src/boot/theme.js` re-applies it before mount. There is no drawer toggle.
 6. **Progress Tracking:** Users can mark works as `listening`, `listened`, `replay`, or `postponed`.
 7. **Work Card Variants:** One component, `WorkCard.vue`, renders both styles: the modern one (tags revealed on hover over the cover) and, with `oldStyle` set, the legacy one (tag chips below the body, text price/sold line, `mic` icon on VA chips). `Works.vue` binds the prop to `oldWorkCardUIStyle`, persisted under LocalStorage key `old_work_card_ui_style_key`. Both share the `workcard` i18n scope.
 8. **Metadata Editing (admin only):** `WorkDetails.vue` shows an "edit metadata" button (i18n key) only when the current user is an admin (computed `isAdmin`: auth disabled, or `group === 'administrator'`, or `name === 'admin'`). It opens `EditMetadata.vue`, which PUTs to `/api/work/:id` with `{title, nsfw, release, circle, tags[], vas[], illustrators[], scriptWriters[], series}` — **tag names sent are the canonical Japanese names** (the backend canonicalizes them again via `resolveTagLabel`). Tag/VA/illustrator/script-writer/series inputs use Quasar `q-select` with `use-input` autocomplete, fetching options from `/api/tags`, `/api/vas`, `/api/illustrators`, `/api/script_writers`, `/api/series`. For tags, the option **label** is the translated name (`tTag`) but the bound **value** is the canonical Japanese name, so storage stays canonical. **`filterTags` matches the typed text against the canonical name only** (`o.name`), not against the displayed label — deliberately, to stay consistent with `/api/search`, which is parsed server-side and understands canonical Japanese alone. The same applies to `filteredItems` in `List.vue`. Do not "fix" either to match the translated name without changing the backend too. On save, the dialog emits `saved` and `WorkDetails.vue` re-reads the work metadata.
@@ -454,6 +463,10 @@ dropped, not given a repeated colour.
 **Single-speaker playback is unchanged:** one stream keeps the plain
 `--on-surface-variant` colour and renders exactly as before.
 
+**Two lyric views, one timeline.** `LyricsBar` shows only the line being spoken; `LyricsFullScreen` scrolls the whole track, so `setLyricStreams` also publishes every cue through `SET_LYRIC_CUES` (`{name, cues:[{start, end, text, voice}]}`, ms on the lyric clock), cleared by `resetToNoLyricStatus`. The overlay flattens that into start-sorted rows — **several rows can be active at once**, because `cueTextAt` lets one cue outlive the next one starting. Clicking a row seeks to `start / 1000 - lyricOffsetSeconds`.
+
+**The overlay is a mode, not a route.** Playback, queue and sockets survive it. Only opening the floating panel closes it (the inset is measured against the bar); the CC toggle just blanks it, and a track without lyrics is blank from the start. It pushes a `history` entry so Back closes it instead of leaving the page, and its rows use `.lyric-row` — **`.row` is Quasar's flex utility** and silently restyles anything that takes the name.
+
 ### 2.10 Internationalization (i18n)
 
 Two separate translation layers, kept apart:
@@ -467,11 +480,11 @@ Two separate translation layers, kept apart:
 
 **Locale resolution (per-user):** on boot, `getInitialLocale()` checks LocalStorage `app_language` → else matches `navigator.language` (exact, then prefix; `zh-TW`/`zh-HK` → `zh-CN`) → else `zh-CN`. The choice is persisted in LocalStorage `app_language`.
 
-**Language switchers:** both live in `pages/Dashboard/Settings.vue` as `q-select`s. The UI one calls `changeLanguage(locale)` from `src/boot/i18n.js` (updates `vue-i18n`, the Quasar lang pack via `Quasar.lang.set`, `<html lang>`, and LocalStorage); the tag one calls `changeTagLanguage(locale)`. The dead server `tagLanguage` config and its radio group were **removed** (scrapers always fetch Japanese; tag language is now a display concern, resolved client-side).
+**Language switchers:** both live in `pages/Settings.vue` as `q-select`s. The UI one calls `changeLanguage(locale)` from `src/boot/i18n.js` (updates `vue-i18n`, the Quasar lang pack via `Quasar.lang.set`, `<html lang>`, and LocalStorage); the tag one calls `changeTagLanguage(locale)`. The dead server `tagLanguage` config and its radio group were **removed** (scrapers always fetch Japanese; tag language is now a display concern, resolved client-side).
 
 **Tag language is independent of the UI language.** `tagLocalePref` (LocalStorage `tag_language`) holds either one of the four locales or the sentinel `FOLLOW_UI` (`'follow'`, the default), which resolves to the current UI locale. `getCurrentTagLocale()` does that resolution; `useTagTranslate()` is bound to it, **not** to `getCurrentLocale()`. Setting it to `ja-JP` gives untranslated (canonical) tag names under any UI language, which is the identity map and therefore always complete.
 
-> **Neither locale is reactive, and that is load-bearing on where the switchers live.** `useTagTranslate()` is a plain function pair reading module-level `let`s (`tagLang` is snapshotted at setup time), and `Cover.vue`, `WorkListItem.vue` and `List.vue` render tag names without a single `t` call — nothing repaints on a locale change. It works because `App.vue` is a bare `<router-view>` and `/admin` (`DashboardLayout`) and `/` (`MainLayout`) are sibling route records: reaching Settings unmounts `MainLayout`, taking the `<keep-alive>` that holds `Works`/`Favourites` with it, so every tag is rendered fresh on the way back. **Move either switcher into `MainLayout`** — a drawer item, a dialog, a quick-toggle — **and this breaks**; make `currentLocale`/`tagLocalePref` `ref`s at that point so render functions subscribe.
+> **Both locales are `ref`s, and that is load-bearing.** `Cover.vue`, `WorkCard.vue`, `WorkListItem.vue`, `List.vue` and `FilterTerms.vue` render tag names without a single `t` call, so nothing would repaint on a tag-locale switch unless the render subscribed to the locale state. `tTag()` and `tagLang` from `useTagTranslate()` read `currentTagLocale`, a `computed` over the two refs (`currentLocale`, `tagLocalePref`), which is what makes a switch repaint already-mounted pages — including the `<keep-alive>`d `Works`/`Favourites`, since `pages/Settings.vue` now sits **inside** `MainLayout` and reaching it no longer unmounts anything. **Do not turn those two back into plain `let`s** (nor snapshot `tagLang` at setup): the chips would go stale until the next remount.
 
 **Han unification / `lang` attributes.** Roboto and the rest of Quasar's default stack carry no CJK glyphs, so Han characters resolve through the browser's fallback — and the browser picks *which* CJK face from the nearest `lang` attribute, falling back to its own language setting when there isn't one. **Two owners, no overlap:** `<html lang>`/`dir` belong to Quasar — `Quasar.lang.set(pack)` writes the pack's `isoName` (`zh-CN`, `zh-TW`, `ja`, `en-US`), and `boot/i18n.js` awaits the initial pack load so that attribute is in place before the first paint; `htmlLang()` (`zh-Hans`/`zh-Hant`/`ja`/`en`) is used **only** for the per-element tag `lang`, never for the document. Because tags can be in a *different* language than the UI, every element rendering a tag name carries its own `:lang="tagLang"` — `Cover`, `WorkCard`, `WorkDetails`, `WorkListItem`, the tag `q-btn`s in `List.vue`, and the autocomplete in `EditMetadata.vue` (each pulls `tagLang` from `useTagTranslate()`). The already-attached chips in `EditMetadata.vue` are hardcoded `lang="ja"` since they always show the canonical Japanese name. **Add `:lang="tagLang"` to any new element that renders `tTag(...)`** — without it, Japanese kanji get drawn with Simplified-Chinese glyph shapes for a zh-configured browser.
 
@@ -490,11 +503,6 @@ Two separate translation layers, kept apart:
 - **Service Worker:** PWA mode uses Workbox in **InjectManifest** mode — the worker is hand-written at `src-pwa/custom-service-worker.js`, not generated. `quasar.config.js` now carries only *build-time* PWA options (`extendInjectManifestOptions` → the precache `exclude` list, and `extendPWACustomSWConf` → the esbuild target); all *runtime* behaviour (`skipWaiting`/`clientsClaim`, navigation fallback, caching routes) lives in the worker file. The switch from GenerateSW was required because a generated worker can only express routes, and the offline-download feature needs SW event handlers (Background Fetch).
   - The worker excludes `/api/*` and `/media/*` from navigation fallback, and registers three routes (all into a single `offline-tracks` Cache Storage bucket): `CacheFirst` + `RangeRequestsPlugin` on `/api/media/offline/*` (tracks/lyrics), `CacheFirst` on `/api/cover/*` (work covers), and `NetworkFirst` on `/api/work/:id`, `/api/tracks/:id`, `/api/review` (work-detail page JSON — live data when online, cached snapshot as offline fallback). The first two are populated only by the explicit download action (`src/utils/downloads.js`), never by ordinary streaming; the third also auto-populates on any successful browse, since JSON metadata is small and bounding it risks evicting a downloaded work's snapshot.
   - **Match routes on the pathname, never on an `^/api/...`-anchored RegExp — and strip the deploy prefix first.** The matchers call `appPath(url)` (`stripBasePath(url.pathname)`), because under a sub-path install every pathname arrives as `/prefix/api/...`; on a root-served install it is the identity. Workbox's `RegExpRoute` execs the pattern against the *absolute* URL (`url.href`, e.g. `https://host/api/...`), so a leading `^\/api\/` can never match. The original `runtimeCaching` config made exactly this mistake and all three routes were silently dead — downloads were written to Cache Storage by the page but never served back from it, so offline playback did not work. (`NavigationRoute`'s denylist is unaffected: it matches on `url.pathname + url.search`, which is why navigation exclusion always worked. **Keep those denylist patterns unanchored** — under a deploy path prefix the pathname is `/kikoeru/api/...`, and an anchored `^\/api\/` would miss it, silently handing API requests the SPA shell while offline.)
-- **Never drive a per-frame loop, and never leave an animation running.** This is a battery-first UI — people listen for hours with the screen on — and iOS Safari charges for every frame the page produces, not for the JS in it: a full-screen composite on a phone measures ~9 ms, so a page held at 60 frames/s spends more than half its wall clock in the compositor. Rules:
-  - Playback-derived state is **scheduled to its next change**, not sampled per frame: a `requestAnimationFrame` that early-returns still schedules a frame for every vsync, forever. Where a value must track the media clock more closely than `timeupdate` allows (~250 ms, its cadence on iOS), use one `setTimeout` for the next cue/transition, re-armed from the real clock so a late fire self-corrects.
-  - `Scrollable` animates only while it has something to scroll (`.animating`), and that class carries `will-change: transform` so the scroll stays on the compositor instead of re-resolving style and laying out the page every frame. A `transition` on the same property keeps a transform animation on the main thread.
-  - Gate anything that animates forever on `document.visibilityState` and on the player surface that is actually on screen.
-  - To re-check after a change: attach Web Inspector to the device, Timelines tab, record ~20 s hands-off, and look at the Frames view (should be mostly empty gaps) and the composite totals in Layout & Rendering.
 - **LocalStorage Keys (reserved):**
   | Key | Type | Purpose |
   |-----|------|---------|
@@ -505,6 +513,7 @@ Two separate translation layers, kept apart:
   | `forward_seek_time` | number | Forward step in seconds (default 30) |
   | `ai_server_url` | string | AI server URL (unused?) |
   | `old_work_card_ui_style_key` | boolean | Legacy card UI toggle |
+  | `theme_mode` | string | Theme preference — `auto` (default, follows the OS), `light` or `dark`. Applied by `src/boot/theme.js` via `src/utils/theme.js` |
   | `app_language` | string | UI locale (`zh-CN`/`en-US`/`ja-JP`/`zh-TW`); set by the Settings language switcher, auto-detected from browser on first load |
   | `tag_language` | string | Tag display locale — one of the four locales, or `follow` (default) to track `app_language`. See §2.10 |
   | `downloaded_files` | array | Offline-download manifest (`module-Downloads/state.js`): `{url, workId, trackId, type, title, workTitle, bytes, downloadedAt}[]`, plus `contentHash`/`duration` on audio rows. Metadata only — actual bytes live in the service worker's Cache Storage, not here. Those two extra fields are what lets `Downloads.playWork` build a queue that can report progress and show a track length with no tree to read from; manifests written before they were recorded simply lack them. |
@@ -550,12 +559,98 @@ npm run dev        # quasar dev -m pwa (proxies /api + /socket.io to localhost:8
 npm run build      # quasar build -m pwa --debug  (NOTE: debug build)
 npm run build:prod # quasar build -m pwa          (use this for releases)
 
-npm test           # Run ESLint
-npm run theme      # Regenerate material-theme.json / .scss from the seed color
+npm test           # check:i18n + check:theme + check:contrast + ESLint, in that order
+npm run check:i18n # i18n guard only (see §2.10)
+npm run check:theme # colour-name guard only (see below)
+npm run check:contrast # WCAG contrast guard only (see below)
+npm run theme      # Regenerate quasar.variables.scss / material-theme.scss / theme-utilities.scss from material-theme.json
 ```
 
 Both build targets are **PWA**, not SPA, and output to `../backend/dist` (`distDir` in
 `quasar.config.js`) so the backend serves them as static content.
+
+**`npm run theme` does not run unmodified on current Node; use `npx --yes tsx
+scripts/generate-theme.mjs` instead.** `@material/material-color-utilities@0.4.0` (still the
+latest) ships ESM with extensionless relative specifiers (`from
+'../dynamiccolor/dynamic_scheme'`), which Node's resolver rejects and
+`--experimental-specifier-resolution=node` no longer covers. `tsx` resolves them the way a
+bundler does. This is why the script is run rarely and by hand; do not patch `node_modules`
+expecting it to survive the next install, and do not wire a workaround into the npm script.
+
+**A colour prop takes a colour NAME, because Quasar builds the class itself. Never pass the
+class.** `color="primary"` becomes `bg-primary` and `toggle-text-color="on-primary"` becomes
+`text-on-primary`, so `toggle-text-color="text-on-primary"` produces `text-text-on-primary`
+and `color="on-info-container"` on a `q-btn` produces a `bg-on-info-container` that the theme
+does not emit (only `.text-*` exists for `on-*` roles). Either way the element renders
+completely unstyled and **nothing is logged** — Vue sees a plain string and the browser sees
+an unmatched class. `scripts/check-theme-classes.mjs` (`npm run check:theme`, part of
+`npm test`) is the only warning you get: it resolves every colour prop in `src/**/*.vue`
+against the CSS that actually ships — Quasar's palette (`colors.sass`/`dist/quasar.css`),
+the generated `src/css/theme-utilities.scss`, and hand-written classes in `src/css/*.scss`
+(which is why `color="rating-star"` passes) — reads string literals out of bound values
+(`:color="x ? 'on-primary' : 'negative'"`), and suggests the nearest name on a typo. Its
+prop→`bg-`/`text-` table is per component, because `color` means a text colour on `q-icon`,
+`q-spinner*`, `q-rating` and the progress/knob widgets but a background on `q-btn`,
+`q-badge`, `q-chip` and `q-avatar`; a prop it does not list is not checked, so adding a new
+one means adding it there.
+
+**Material 3 has ONE `on-surface` role, not one per surface.** There is a `bg-` utility per
+surface but text on any of them is `on-surface` (`on-surface-variant` when it should read
+quieter) — so the pair is `color="surface-container-low" text-color="on-surface"`, which is
+what the `q-btn-toggle` segments, chips and gallery tiles all use. `on-surface-container-low`
+et al. are **not** Material roles and have no class or variable behind them: that name renders
+in the inherited colour and logs nothing. Do not add per-surface on-colours to
+`generate-theme.mjs` to make it resolve; the single role is the standard.
+
+**A background colour does not imply a readable foreground, so `npm run check:contrast`
+measures every pair.** `use-btn.js` falls back to `text-${textColor || 'white'}`, so a solid
+`q-btn color="primary-container"` with no `text-color` renders white on pale lavender —
+**1.29:1 in light mode while dark mode measures 9.4:1 and looks fine**. That asymmetry is why
+an omitted pair survives review: it only breaks in the tier you are not looking at. The
+script resolves the pair each element actually renders (including Quasar's per-component
+defaults: white for `q-btn`/`q-badge`, `rgba(0,0,0,.87)` for `q-chip`, inherited
+`on-surface` for `q-avatar`), measures it in all six tiers (`light`, `dark`,
+`light/dark-medium`, `light/dark-high`), and fails below WCAG AA — 4.5:1 for text, 3:1 for
+icons and other non-text UI. Values are read from `material-theme.scss`, so it measures the
+real palette; `--q-<brand>` overrides are applied last, which is what makes `primary`
+resolve to the *dark* tone in dark mode. A foreground-only element is measured against the
+nearest ancestor that paints a background (`class="bg-*"`, `header-class`, or a `color` on a
+background component), and a background that only applies while active (`active-class`) is
+reported as a warning rather than a failure. Limits: static attribute values only (a bound
+`:color` is skipped, since either branch could render), and no alpha compositing beyond the
+chip default.
+
+> **The dark scheme's brand tones are light, and Quasar fills with them.** `--q-primary` is
+> `#B4C5FF` in dark mode, so a solid `q-btn color="primary"` with Quasar's default white text
+> measures **1.70:1** — the M3 pairing is `primary` background with `on-primary` text. This is
+> why the guard reports ~19 sites: the fix is `text-color="on-primary"` (or `on-secondary`,
+> `on-tertiary` for `accent`, `on-error` for `negative` — `accent`/`negative` are M3
+> `tertiary`/`error`, so there is no `on-accent`/`on-negative` token). Do not "fix" it by
+> darkening the dark-scheme brand tones: `text-primary` on a dark surface depends on them
+> being light.
+
+**Chrome colours are derived, not declared.** `quasar.config.js` reads
+`src/material-theme.json` and passes `themeColor` (light primary) / `themeColorDark` (dark
+surface) to `index.html` through `htmlVariables`, which renders the two
+`<meta name="theme-color">` tags; the same file's `extendManifestJson` sets the manifest's
+`theme_color` / `background_color`. Do not hardcode either in `src-pwa/manifest.json` or in
+the HTML template.
+
+**The HTML template is `index.html` at the app root, not `src/index.template.html`.**
+Quasar 2 reads `sourceFiles.indexHtmlTemplate`, which defaults to `index.html`. The
+`src/index.template.html` path is the pre-v2 location: a file left there is silently
+ignored, so edits to it never reach a build. The template's variables are
+`quasar.config.js > htmlVariables` (`productName`, `productDescription`, `themeColor`, …),
+*not* `htmlWebpackPlugin.options`.
+
+**Brand variables must take the tone of the variant they are emitted for.**
+`vars(scheme, brandVariant)` writes `--q-positive`/`--q-info`/`--q-warning` from
+`extended[<colour>][brandVariant]`, so a block's brand colour and its `--on-*` tokens come
+from the same tonal variant. Emitting the dark tone for a light contrast tier paired white
+`--on-warning` with a light amber `--q-warning` and measured **1.7:1** in
+`body.contrast-medium` / `body.contrast-high` — the two accessibility modes. The semantic
+colours are the part of the theme that is *not* Theme Builder output: they come from the
+hand-authored `TONES` table, so they are the part that can regress.
 
 ---
 
@@ -566,8 +661,6 @@ Both build targets are **PWA**, not SPA, and output to `../backend/dist` (`distD
 Never swap the two: `title` is what the backend builds media URLs from (see `backend/AGENTS.md` §2.9b).
 
 **The player shows it too, via one getter.** `toQueueItem` carries `trackTitle` onto the queue item — but **only when the work has one**, matching how `mediaStreamUrl` is handled, since every field on a queue item is re-uploaded on each `PUT /api/history`. `AudioPlayer/currentPlayingTitle` resolves `trackTitle || title` once, and `PlayerBar`, `AudioPlayer` and the `mediaSession` metadata in `AudioElement` all read it rather than `currentPlayingFile.title`. This is the only way the player can know the display name: the resume paths hand a **stored** queue to `SET_QUEUE` and never refetch the tree.
-
-> **`FullScreenPlayer`'s title overlay is easy to miss**: it sits behind `v-if="isInFullScreen"`, true only once the browser fullscreen API engages. Opening the page shows a bare cover — the title, progress bar and `LyricsBar` all appear only after a double-click enters real fullscreen.
 
 The **history surfaces** resolve it the same way: `FavListItem.parkedTrackTitle`, `RecentWorks.getWorkHistoryInfo`, `WorkDetails.currentHistoryTrack`. They read the *stored* queue, so a row written before titles existed keeps showing the filename until that queue is rebuilt from the tree — i.e. the next time the work is played from its own page.
 
@@ -712,6 +805,8 @@ Build output goes directly into `backend/dist/` (configured via `distDir` in `qu
 ## 8. Testing
 
 - **Linting:** ESLint with Vue plugin
+- **Linting:** ESLint with Vue plugin
+- **Guards:** `npm test` runs `scripts/check-i18n.mjs` (§2.10), `scripts/check-theme-classes.mjs` and `scripts/check-theme-contrast.mjs` (§4) *before* ESLint. All three exist because their failure mode is silent: a legacy `$t` renders nothing, an unknown colour name renders unstyled, and a low-contrast pair renders unreadable — none of them is an error anywhere else. The two theme guards share `scripts/lib/theme-scan.mjs` for tag/attribute scanning.
 - **Run:** `npm test` from `frontend/`, or `npm run lint` from the repo root (there is no root `npm test`; the root script runs the backend lint first, then the frontend checks).
 
 ---
@@ -723,5 +818,5 @@ Build output goes directly into `backend/dist/` (configured via `distDir` in `qu
   - **Not the old infinite-reload loop**, which had a different cause: an `updated()` `Notify` whose `onDismiss` called `location.reload()`, and `onDismiss` fires on the dismiss *timeout* too — so every recompile scheduled a reload ten seconds out. Deleting that `Notify` fixed it (`17e3e6b`); unregistering never addressed it. Do not remove the dev block on the grounds that the loop is gone.
   - **What dev can and cannot test now.** Whole-work downloads *do* work, because `canBackgroundFetch()` is false without a worker and the foreground path needs only Cache Storage. Offline *playback* does not — `AudioElement` requests `/api/media/offline/...` over the network and nothing is there to answer from cache. Background Fetch, Background Sync and offline navigation all need a production build.
   - **Testing footgun:** DevTools → Application → Service Workers → **Bypass for network** makes a correctly registered worker look entirely absent — `navigator.serviceWorker.controller` reads `null` and every offline behaviour fails. Combined with the Offline checkbox it is indistinguishable from broken offline support. Also note Firefox's offline throttle serves from the HTTP cache, so a reload can succeed there with no worker involved at all; Chromium's is the stricter test, and pulling wifi is stricter still.
-- **Dark mode:** Quasar's `Dark` plugin respects OS preference (`dark: auto`). Toggle via `Dark.toggle()` in `MainLayout.vue`.
+- **Dark mode:** Quasar's `Dark` plugin starts on `dark: 'auto'` (OS preference). The switcher is the Theme `q-select` in `pages/Settings.vue`, stored under LocalStorage `theme_mode` and re-applied by `src/boot/theme.js` before mount — `Dark.set()` takes `true`/`false`/`'auto'`, so pass the resolved mode, never a raw string it would read as truthy.
 - **Component debugging:** Install Vue DevTools for inspecting Vuex state and component hierarchy.

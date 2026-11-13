@@ -69,6 +69,19 @@ describe('track identity: relPath', function () {
     assert.equal(track.shortFilePath, 'SE/sub dir/03.mp3');
   });
 
+  // The walk lists directories alongside files, and the type used to be chosen
+  // from the extension alone -- so a folder named `bonus.txt` showed up in the
+  // worktree as a ghost text file (and an `.mp3` folder as an unplayable track).
+  it('does not list a directory whose name looks like a file', async function () {
+    write('01 intro.mp3');
+    write('bonus.txt/nested.txt');
+    write('extras.mp3/inside.mp3');
+
+    const tracks = await getTrackList('000001', dir);
+    assert.deepEqual(tracks.map(t => t.shortFilePath).sort(),
+      ['01 intro.mp3', 'bonus.txt/nested.txt', 'extras.mp3/inside.mp3']);
+  });
+
   it('exposes relPath on every node type, not just audio', async function () {
     write('01 intro.mp3');
     write('cover.jpg');

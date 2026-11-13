@@ -10,9 +10,26 @@ export const FORWARD_SEEK_TIME_KEY = 'forward_seek_time'
 // sessionStorage 中持久化睡眠定时的键，值为 { type, stopAt, tracksLeft }
 export const SLEEP_TIMER_KEY = 'sleepTimer'
 
+// How long a seek-bar jump can be undone. The pill is the only way back, so the
+// memory lives exactly as long as the pill: once it is gone, the next jump
+// starts a new one.
+export const SEEK_UNDO_PILL_MS = 30000
+
+// Shared by the floating lyric bar and the full-screen lyric view, in rem.
+export const LYRIC_FONT_SIZE_KEY = 'lyricFontSize'
+
+// Read through Quasar so both its `__q_numb|` encoding and the plain value the
+// old bar wrote with `localStorage.x = n` decode to a number.
+function readLyricFontSize () {
+  const stored = parseFloat(LocalStorage.getItem(LYRIC_FONT_SIZE_KEY))
+  return Number.isFinite(stored) && stored > 0 ? stored : 1.5
+}
+
 export default function () {
   return {
-    hide: false,
+    // `hide` true = the docked bar is shown and the floating panel is not.
+    // Wide screens default to the bar: the panel adds nothing there.
+    hide: typeof window !== 'undefined' && window.matchMedia('(min-width: 600px)').matches,
     playing: false, // 播放状态 (true/false)
     currentTime: 0, // 单位: 秒
     newCurrentTime: -1, // 单位：秒，<0 的负数表示当前无需更改媒体的currentTime，>=0 表示需要更改媒体的currentTime
@@ -42,6 +59,22 @@ export default function () {
     // format carries no name. Fixed for the track, so it is set once on load.
     lyricSpeakers: [],
     lyricOffsetSeconds: 0,
+    // Every cue of every stream, so the full-screen view can render the whole
+    // timeline: `currentLyrics` only ever holds the line being spoken now.
+    // Shape: [{ name, cues: [{ start, end, text, voice }] }], times in ms.
+    lyricCues: [],
+    // The floating lyric window vs the full-screen lyric view.
+    lyricsFullScreen: false,
+    lyricFontSize: readLyricFontSize(),
+    // The current play list dialog. It lives in `AudioPlayer` (always mounted),
+    // and both players' queue buttons open it, so the flag cannot be local.
+    queueDialogOpen: false,
+    // Where a seek-bar jump came from: { time, at } — `time` is the position
+    // before the first jump of the current run, `at` the moment of the latest
+    // one. Null when there is nothing to go back to. Both the pill and the
+    // memory are derived from `at` (SEEK_UNDO_PILL_MS), so there is no second
+    // flag to fall out of sync.
+    seekUndo: null,
     sleepMode: false,          // 睡眠定时是否开启
     sleepModeType: null,       // 'minutes' | 'tracks'
     sleepStopAt: null,         // minutes 模式：停止播放的时间戳 (ms)
@@ -50,6 +83,7 @@ export default function () {
     forwardSeekTime: LocalStorage.has(FORWARD_SEEK_TIME_KEY) ? LocalStorage.getItem(FORWARD_SEEK_TIME_KEY) : 30,
     rewindSeekMode: false,
     forwardSeekMode: false,
+    showLyrics: true, // CC toggle in the play bar; LyricsBar hides when off
     swapSeekButton: LocalStorage.has(SWAP_SEEK_BUTTON_KEY) && LocalStorage.getItem(SWAP_SEEK_BUTTON_KEY), // 交换进度按钮与切换按钮
     visualPlayerCoverUrl: '', // 可视化播放器的封面图
     playWorkId: 0, // 当前播放作品的id

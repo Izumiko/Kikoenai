@@ -1,16 +1,25 @@
 import { LocalStorage, SessionStorage } from 'quasar'
 import getters from './getters'
-import state, { SWAP_SEEK_BUTTON_KEY, FLIP_LR_CHANNEL_KEY, AI_SERVER_URL_KEY, OLD_WORK_CARD_UI_STYLE_KEY, AUTO_MARK_LISTENED_KEY, REWIND_SEEK_TIME_KEY, FORWARD_SEEK_TIME_KEY, SLEEP_TIMER_KEY } from './state'
+import state, { SEEK_UNDO_PILL_MS, LYRIC_FONT_SIZE_KEY, SWAP_SEEK_BUTTON_KEY, FLIP_LR_CHANNEL_KEY, AI_SERVER_URL_KEY, OLD_WORK_CARD_UI_STYLE_KEY, AUTO_MARK_LISTENED_KEY, REWIND_SEEK_TIME_KEY, FORWARD_SEEK_TIME_KEY, SLEEP_TIMER_KEY } from './state'
 import { apiUrl } from 'src/base-path'
 
 const selectTrack = (state, index, seconds = 0) => {
   state.queueIndex = index
   state.currentTime = seconds
+  // A new track has nothing to go back to.
+  state.seekUndo = null
 }
 
 const mutations = {
+  SET_HIDE (state, value) {
+    state.hide = Boolean(value)
+    // The floating panel and the full-screen lyric view cannot share the screen.
+    if (!state.hide) state.lyricsFullScreen = false
+  },
+
   TOGGLE_HIDE (state) {
     state.hide = !state.hide
+    if (!state.hide) state.lyricsFullScreen = false
   },
 
   PLAY (state) {
@@ -172,7 +181,13 @@ const mutations = {
     state.forwardSeekMode = value
   },
   SET_HAS_LYRIC: (state, value) => {
+    // The full-screen view is a mode, not a property of the track: a track
+    // without lyrics keeps it open and shows the empty state.
     state.hasLyric = value;
+  },
+  TOGGLE_LYRICS: (state) => {
+    // Only the floating window; the full-screen view is its own switch.
+    state.showLyrics = !state.showLyrics;
   },
   SET_CURRENT_LYRICS: (state, lines) => {
     state.currentLyrics = lines
@@ -182,6 +197,41 @@ const mutations = {
   },
   SET_LYRIC_OFFSET_SECONDS: (state, value) => {
     state.lyricOffsetSeconds = value;
+  },
+  SET_LYRIC_CUES: (state, streams) => {
+    state.lyricCues = streams
+  },
+  SET_LYRICS_FULL_SCREEN: (state, value) => {
+    // Independent of the CC toggle and of whether the track has lyrics: with
+    // nothing to show the view is simply blank.
+    const open = Boolean(value)
+    state.lyricsFullScreen = open
+    // The view is inset above the docked bar, so opening it puts the player
+    // into bar mode first; the panel would sit behind the lyrics otherwise.
+    if (open) state.hide = true
+  },
+  // payload: { time, at }. While the pill is still up, a further jump keeps the
+  // first target, so a run of scrubbing always offers the position before the
+  // run started. Once the pill has gone, the next jump starts a new run.
+  ARM_SEEK_UNDO: (state, { time, at }) => {
+    const current = state.seekUndo
+    const keep = current && at - current.at < SEEK_UNDO_PILL_MS
+    state.seekUndo = { time: keep ? current.time : time, at }
+  },
+  CLEAR_SEEK_UNDO: (state) => {
+    state.seekUndo = null
+  },
+  SET_QUEUE_DIALOG (state, value) {
+    state.queueDialogOpen = Boolean(value)
+  },
+  TOGGLE_QUEUE_DIALOG (state) {
+    state.queueDialogOpen = !state.queueDialogOpen
+  },
+  SET_LYRIC_FONT_SIZE: (state, value) => {
+    const size = Number(value)
+    if (!Number.isFinite(size) || size <= 0) return
+    state.lyricFontSize = size
+    LocalStorage.set(LYRIC_FONT_SIZE_KEY, size)
   },
   // payload: { type: 'minutes', stopAt: <ms> } or { type: 'tracks', tracksLeft: <int> }
   SET_SLEEP_TIMER: (state, { type, stopAt = null, tracksLeft = 0 }) => {

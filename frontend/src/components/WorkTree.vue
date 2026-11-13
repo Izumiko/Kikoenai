@@ -26,7 +26,7 @@
       </template>
     </ImageViewer>
 
-    <q-card>
+    <q-card flat>
       <q-list separator>
         <q-item
           clickable
@@ -43,7 +43,7 @@
             <q-icon size="34px" v-else-if="item.type === 'text'" color="info" name="description" />
             <q-icon size="34px" v-else-if="item.type === 'image'" color="accent" name="photo" />
             <q-icon size="34px" v-else-if="item.type === 'other'" color="info" name="description" />
-            <q-btn v-else round dense color="primary" :icon="playIcon(item.trackId)" @click="onClickPlayButton(item.trackId)" />
+            <q-btn v-else round dense color="primary" text-color="on-primary" :icon="playIcon(item.trackId)" @click="onClickPlayButton(item.trackId)" />
 
           </q-item-section>
 
@@ -378,14 +378,6 @@ export default {
       this.$store.commit('AudioPlayer/SET_VISUAL_PLAYER_COVER_URL', urlWithoutToken);
       this.$q.notify({
         message: this.t('worktree.coverSetSuccess'),
-        actions: [
-          { label: this.t('worktree.goToFullScreen'),
-            handler: () => {
-              // this.$router.push(`/fullScreenPlayer/${this.playWorkId}`)
-              this.$router.push(`/fullScreenPlayer`)
-            }
-          }
-        ],
       });
     },
 

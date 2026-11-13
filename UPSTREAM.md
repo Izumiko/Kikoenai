@@ -17,7 +17,7 @@ can be ported file for file. This document is the map for doing that.
 upstream  https://github.com/Rivers47/Kikoenai.git
 ```
 
-**Last synced upstream commit: `0d3faa0`**
+**Last synced upstream commit: `f0ec290`**
 
 Add the remote once per clone if it is missing:
 
@@ -48,14 +48,14 @@ hold that name. `database/migrations/index.ts` does the renaming per entry and
 
 ### Files outside `backend/` that differ from upstream
 
-The branch shares history with upstream (`0d3faa0` is an ancestor), so
+The branch shares history with upstream (`f0ec290` is an ancestor), so
 `git merge upstream/main` and `git cherry-pick` work normally. What does **not**
 work is dropping upstream files in wholesale: a few files outside `backend/`
 are locally modified for the TypeScript build. This is the complete list as of
-`0d3faa0..HEAD`; regenerate it with:
+`f0ec290..HEAD`; regenerate it with:
 
 ```bash
-git diff --stat 0d3faa0..HEAD -- . ':!backend'
+git diff --stat f0ec290..HEAD -- . ':!backend'
 ```
 
 | File | What is local |
@@ -64,6 +64,7 @@ git diff --stat 0d3faa0..HEAD -- . ':!backend'
 | `.github/workflows/build-debug.yml` | debug image built inside the Containerfile (`KIKO_DEBUG=1`), `workflow_dispatch` only |
 | `.github/workflows/build.yml` | production image built inside the Containerfile on Node 26 — no host Node step |
 | `.github/workflows/package-windows.yml` | Windows portable zip assembled on `ubuntu-latest` |
+| `.github/dependabot.yml` | the docker ecosystem tracks the `node:26-alpine` tags in the Containerfile |
 | `.github/workflows/test.yml` | **new**: lint/typecheck/`node:test`, zip round-trip, frontend build, bundle smoke test |
 | `.gitignore` | ignores `/package/` (portable-zip output) |
 | `AGENTS.md` | root agent guide rewritten for the TypeScript layout and build (docs only) |
@@ -108,11 +109,11 @@ frontend build fails. So:
    them separately first:
 
    ```bash
-   git diff 0d3faa0..upstream/main -- frontend/quasar.config.js \
+   git diff f0ec290..upstream/main -- frontend/quasar.config.js \
                                       frontend/package.json \
                                       frontend/AGENTS.md
 
-   git diff 0d3faa0..upstream/main -- frontend/ \
+   git diff f0ec290..upstream/main -- frontend/ \
      | git apply -3 \
          --exclude=frontend/quasar.config.js \
          --exclude=frontend/package.json \
@@ -217,20 +218,20 @@ When porting an upstream change, walk this list:
 ```bash
 git fetch upstream
 
-# What arrived since the last sync (0d3faa0 is the value at the top of this file)
-git log --oneline 0d3faa0..upstream/main
+# What arrived since the last sync (f0ec290 is the value at the top of this file)
+git log --oneline f0ec290..upstream/main
 
 # Backend work: review the diff, then port it by hand into the matching .ts file
-git log --oneline 0d3faa0..upstream/main -- backend/
-git diff 0d3faa0..upstream/main -- backend/database/queries.js
+git log --oneline f0ec290..upstream/main -- backend/
+git diff f0ec290..upstream/main -- backend/database/queries.js
 
 # Frontend work is plain JS, but three files are locally modified (see the
 # divergence table). A plain `git apply` of the whole frontend diff fails
 # atomically there, so look at those hunks separately, then apply the rest:
-git diff 0d3faa0..upstream/main -- frontend/quasar.config.js \
+git diff f0ec290..upstream/main -- frontend/quasar.config.js \
                                    frontend/package.json \
                                    frontend/AGENTS.md
-git diff 0d3faa0..upstream/main -- frontend/ \
+git diff f0ec290..upstream/main -- frontend/ \
   | git apply -3 \
       --exclude=frontend/quasar.config.js \
       --exclude=frontend/package.json \

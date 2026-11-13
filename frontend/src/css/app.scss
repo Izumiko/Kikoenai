@@ -4,6 +4,38 @@
 // To change the theme: replace the JSON and run `npm run theme`.
 @import './material-theme.scss';
 @import './theme-utilities.scss';
+body,
+html body.body--dark {
+  background: rgb(var(--surface-rgb));
+}
+
+.q-header {
+  padding-top: env(safe-area-inset-top);
+}
+
+aside.q-drawer {
+  top: env(safe-area-inset-top);
+  background: rgb(var(--surface-container-high-rgb));
+}
+
+.q-card{
+  background: rgb(var(--surface-container-rgb));
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+
+.q-menu {
+  border-radius: var(--md-sys-shape-corner-small);
+}
+
+.q-dialog__inner > .q-card {
+  border-radius: var(--md-sys-shape-corner-extra-large);
+}
+
+.q-menu,
+.q-tab-panels,
+.q-table__card {
+  background: rgb(var(--surface-container-highest-rgb));
+}
 
 // App-specific tokens (no Material role; adjust to taste)
 :root {

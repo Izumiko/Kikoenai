@@ -48,11 +48,12 @@ const mergeOverlay = async (workId: string, walked: WalkedTrack[]): Promise<Walk
 };
 
 /**
- * Shape stored rows exactly the way getTrackList shapes a walk, including the
- * sort.
+ * Turn stored rows into the same track objects getTrackList returns for a walk,
+ * in the same order. t_work_file is the only other source of a track list, and
+ * every caller expects one object type.
  */
-const shapeRows = (workId: string, workDir: string, rows: WorkFileSelectRow[]): Track[] => {
-  const shaped: ShapedTrack[] = rows.map((row) => {
+const rowsToTracks = (workId: string, workDir: string, rows: WorkFileSelectRow[]): Track[] => {
+  const tracks: ShapedTrack[] = rows.map((row) => {
     const relPath = row.rel_path;
     const dirName = path.dirname(relPath);
     return {
@@ -69,7 +70,7 @@ const shapeRows = (workId: string, workDir: string, rows: WorkFileSelectRow[]): 
   });
 
   // The same comparator getTrackList uses.
-  const sorted = orderBy(shaped, [v => v.subtitle, v => v.title, v => v.ext]);
+  const sorted = orderBy(tracks, [v => v.subtitle, v => v.title, v => v.ext]);
 
   // getTrackList only attaches duration/trackTitle to audio, and callers read
   // `undefined` as "unknown". Mirror that rather than exposing them on a .jpg.
@@ -86,7 +87,7 @@ const shapeRows = (workId: string, workDir: string, rows: WorkFileSelectRow[]): 
 /**
  * Walk the work folder and replace its rows. Preserves durations and track
  * titles for files that are still there.
- * @returns {Promise<Array>} the shaped track list, as listWorkTracks returns.
+ * @returns {Promise<Array>} the track list, as listWorkTracks returns.
  */
 async function indexWorkFiles (workId: string, workDir: string, tracks?: WalkedTrack[], dbApi: WorkFilesDb = db): Promise<Track[]> {
   const walked = await mergeOverlay(workId, tracks || await getTrackList(workId, workDir));
@@ -107,7 +108,7 @@ async function indexWorkFiles (workId: string, workDir: string, tracks?: WalkedT
   });
 
   await dbApi.replaceWorkFiles(workId, rows);
-  return shapeRows(workId, workDir, rows);
+  return rowsToTracks(workId, workDir, rows);
 }
 
 /**
@@ -123,11 +124,11 @@ async function listWorkTracks (workId: string, workDir: string, { indexedAt, dbA
     // Durations already in the rows are carried forward by indexWorkFiles.
     return indexWorkFiles(workId, workDir, undefined, dbApi);
   }
-  return shapeRows(workId, workDir, await dbApi.getWorkFiles(workId));
+  return rowsToTracks(workId, workDir, await dbApi.getWorkFiles(workId));
 }
 
 /**
- * @returns {Promise<Array>} the shaped track list
+ * @returns {Promise<Array>} the track list
  */
 async function rescanWorkFiles (workId: string, workDir: string, dbApi: WorkFilesDb = db): Promise<Track[]> {
   const existing = await dbApi.getWorkFiles(workId);
@@ -141,4 +142,4 @@ async function rescanWorkFiles (workId: string, workDir: string, dbApi: WorkFile
   return indexWorkFiles(workId, workDir, tracks, dbApi);
 }
 
-export { listWorkTracks, indexWorkFiles, rescanWorkFiles, shapeRows, overlayDir };
+export { listWorkTracks, indexWorkFiles, rescanWorkFiles, rowsToTracks, overlayDir };

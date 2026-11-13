@@ -4,7 +4,7 @@
     <div class="row items-center q-mb-sm">
       <span class="text-h5 text-weight-regular q-pa-xs relative-position">
         {{ t('downloads.title') }}
-        <q-badge color="secondary" floating>{{ downloadedWorks.length }}</q-badge>
+        <q-badge color="secondary" text-color="on-secondary" floating>{{ downloadedWorks.length }}</q-badge>
       </span>
     </div>
 
@@ -48,9 +48,10 @@
           spread
           rounded
           v-model="listMode"
-          toggle-color="primary"
-          color="white"
-          text-color="primary"
+          toggle-color="primary-container"
+          toggle-text-color="on-primary-container"
+          color="surface-container-lowest"
+          text-color="on-surface"
           :options="[
             { icon: 'apps', value: false },
             { icon: 'list', value: true }
@@ -67,7 +68,7 @@
       </div>
 
       <!-- List View -->
-      <q-list v-else-if="listMode" bordered separator class="shadow-2">
+      <q-list v-else-if="listMode" bordered separator>
         <div v-for="work in sortedWorks" :key="work.workId">
           <WorkListItem :metadata="cardMetadata(work)" :cover-url="work.thumbUrl" :showLabel="false">
             <template v-slot:side>

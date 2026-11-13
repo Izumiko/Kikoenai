@@ -1,236 +1,455 @@
 <template>
-  <q-card
-    class="bordered playBar"
-    :class="{
-      showStyle: showPlayBar,
-      hideStyle: !showPlayBar,
-      playBarBumpUp: isPanning
-    }"
-    draggable="false"
+  <div
+    class="docked-bar non-selectable"
+    :class="{ 'docked-bar--hidden': !visible, 'docked-bar--seeking': seeking, 'docked-bar--behind': behindDrawer }"
+    :style="{ left: `${leftOffset}px` }"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
+    @pointercancel="onPointerUp"
+    @wheel.prevent
   >
     <div
-      ref="playBarBox"
-      class="row"
-      color="primary"
-      :class="{}"
+      class="rail"
+      ref="rail"
+      @pointerenter="railHovered = true"
+      @pointerleave="railHovered = false"
     >
-      <!--默认进度条-->
-      <div class="simple-progress" :style="progressBarStyle"></div>
-
-      <!--拖拽时的进度条-->
+      <div class="rail-bar">
+        <div class="rail-fill" :style="{ width: `${progressPercent}%` }"></div>
+        <div
+          v-if="seeking"
+          class="rail-preview"
+          :style="{ width: `${previewPercent}%` }"
+        ></div>
+      </div>
+      <span
+        v-if="seekUndoVisible"
+        class="rail-undo"
+        :style="{ left: `${seekUndoPercent}%` }">
+      </span>
       <div
-        class="new-progress row justify-end"
-        :class="{hideNewProgress: !isPanning}"
-        :style="newProgressBarStyle"
-      >
-        <span class="q-pa-xs" :style="showDeltaTimeStyle" style="transition: all 0.5s;">
-          <div class="text-h4">
-            {{ showNewCurrentTime }}
-          </div>
-          <div>
-            {{ showDeltaTime }}
-          </div>
-        </span>
+        v-if="seeking || railHovered"
+        class="rail-thumb"
+        :style="{ left: `${seeking ? previewPercent : progressPercent}%` }"
+      ></div>
+      <span v-if="seeking" class="rail-bubble" :style="{ left: `${previewPercent}%` }">
+        {{ formatSeconds(previewTime) }}
+      </span>
+    </div>
+
+    <!-- The bar slides out of view in panel mode; its pill must go with it. -->
+    <SeekUndoPill v-if="visible" class="bar-seek-undo" />
+
+    <div class="body">
+      <div class="cover" @pointerdown.stop @click.stop="openWorkDetail">
+        <q-img :src="coverUrl" :ratio="1" class="cover-img" transition="fade" />
       </div>
 
-      <!--音量指示器-->
-      <div class="volumeIndicator" :style="{
-        height: `${volume*100}%`,
-        width: showVolumeIndicator ? `${volumeIndicatorWidth}px` : 0,
-      }"></div>
-      <q-item 
-        style="padding: 0px 5px;"
-        class="col non-selectable"
-        @mousedown.prevent.stop="mouseDown"
-        @touchstart.prevent.stop="touchStart" 
-        @touchend.prevent.stop="touchEnd" 
-        @touchmove.prevent.stop="touchMove" 
-        @touchcancel.prevent.stop="touchCancel" 
-      >
-        <q-item-section avatar>
-          <q-img transition="fade" :src="samCoverUrl" style="height: 50px; width: 50px" class="rounded-borders" />
-        </q-item-section>
-        
-        <q-item-section>
-          <Scrollable class="full-width" :stop="!hide">
-            <span class="audio-name relative-position">{{ currentPlayingTitle }}</span>
+      <div class="main">
+        <div class="texts">
+          <div class="title-row">
+            <Scrollable class="title-scroll" :stop="!hide" name="barTitle">
+              <span class="title">{{ currentPlayingTitle }}</span>
+            </Scrollable>
+            <span class="meta" v-if="queueLength">
+              <span class="meta-index">{{ trackIndex }}</span>
+              <span class="meta-total">{{ formatSeconds(workDuration) }}</span>
+            </span>
+          </div>
+          <Scrollable class="track-scroll" :stop="!hide" name="barTrack">
+            <span class="track">{{ currentPlayingFile.workTitle }}</span>
           </Scrollable>
-          <Scrollable class="full-width" :stop="!hide">
-            <span class="work-name relative-position">{{ currentPlayingFile.workTitle }}</span>
-          </Scrollable>
-          <!--
-          <q-item-label lines="2">{{ currentPlayingTitle }}</q-item-label>
-          <q-item-label caption lines="1">{{ currentPlayingFile.workTitle }}</q-item-label>
-          -->
-        </q-item-section>
-      </q-item>
+          <div class="vas" v-if="vaNames">
+            <q-icon name="mic" class="va-icon" />
+            <span>{{ vaNames }}</span>
+          </div>
+        </div>
 
-      <q-btn flat size="lg" :icon="swapSeekButton ? rewindIcon : 'skip_previous'" @click.prevent.stop="swapSeekButton ? rewind(true) : previousTrack()" style="height: 60px; width: 60px" class="col-auto gt-xs"/>
-      <q-btn flat size="lg" :icon="playingIcon" @click.prevent.stop="togglePlaying()" style="height: 60px; width: 60px" class="col-auto" />
-      <q-btn flat size="lg" :icon="swapSeekButton ? forwardIcon : 'skip_next'" @click.prevent.stop="swapSeekButton ? forward(true) : nextTrack()" style="height: 60px; width: 60px" class="col-auto gt-xs"/>
+        <div class="transport" @pointerdown.stop>
+          <span class="time">{{ formatSeconds(currentTime) }}</span>
+          <q-btn flat round dense class="seek" :icon="rewindIcon" @click="rewind(true)">
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ t('playerbar.rewind', { seconds: rewindSeekTime }) }}
+            </q-tooltip>
+          </q-btn>
+          <q-btn flat round dense class="skip" icon="skip_previous" @click="previousTrack()" />
+          <q-btn
+            round
+            unelevated
+            class="play"
+            color="primary"
+            text-color="on-primary"
+            :icon="playing ? 'pause' : 'play_arrow'"
+            @click="togglePlaying()"
+          />
+          <q-btn flat round dense class="skip" icon="skip_next" @click="nextTrack()" />
+          <q-btn flat round dense class="seek" :icon="forwardIcon" @click="forward(true)">
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ t('playerbar.forward', { seconds: forwardSeekTime }) }}
+            </q-tooltip>
+          </q-btn>
+          <span class="time time--total">{{ formatSeconds(duration) }}</span>
+        </div>
+
+        <div class="actions" @pointerdown.stop>
+          <q-btn flat round dense class="action" icon="queue_music" @click="toggleQueueDialog()">
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ t('audioplayer.switchTrack') }}
+            </q-tooltip>
+          </q-btn>
+
+          <q-btn
+            flat
+            round
+            dense
+            class="action"
+            :class="{ 'action--on': showLyrics && hasLyric }"
+            :disable="!hasLyric"
+            icon="closed_caption"
+            @click="toggleLyrics()"
+          >
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ hasLyric ? t('playerbar.lyrics') : t('playerbar.noLyrics') }}
+            </q-tooltip>
+          </q-btn>
+
+          <q-btn v-if="!narrow" flat round dense class="action" :icon="playModeIcon" @click="changePlayMode()">
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ playModeString }}
+            </q-tooltip>
+          </q-btn>
+
+          <q-btn
+            v-if="!narrow"
+            flat
+            round
+            dense
+            class="action"
+            :class="{ 'action--on': sleepMode }"
+            icon="snooze"
+            @click="showSleepTimer = true"
+          >
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ sleepTimerTooltip }}
+            </q-tooltip>
+          </q-btn>
+
+          <q-btn
+            v-if="showVolume"
+            flat
+            round
+            dense
+            class="action"
+            :icon="volumeIcon"
+          >
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ t('playerbar.volume') }}
+            </q-tooltip>
+            <q-menu anchor="top middle" self="bottom middle" :offset="[0, 8]">
+              <div class="volume-menu row items-center no-wrap">
+                <q-btn flat round dense :icon="volumeIcon" @click="toggleMuted()" />
+                <q-slider
+                  :model-value="volume"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  color="primary"
+                  class="col q-ml-sm"
+                  @update:model-value="setVolume"
+                />
+              </div>
+            </q-menu>
+          </q-btn>
+
+          <q-btn
+            flat
+            round
+            dense
+            class="action"
+            :class="{ 'action--on': lyricsFullScreen }"
+            :icon="lyricsFullScreen ? 'close_fullscreen' : 'open_in_full'"
+            @click="toggleLyricsFullScreen()"
+          >
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ lyricsFullScreen ? t('lyricsfullscreen.close') : t('lyricsfullscreen.open') }}
+            </q-tooltip>
+          </q-btn>
+
+          <q-btn flat round dense class="action action--more" icon="more_horiz">
+            <q-tooltip anchor="top middle" self="bottom middle">
+              {{ t('audioplayer.moreSettings') }}
+            </q-tooltip>
+            <q-menu anchor="top right" self="bottom right">
+              <q-list dense style="min-width: 15rem">
+                <template v-if="compact || narrow">
+                  <!-- Each entry appears only while its button is off the bar:
+                       phones hide everything but ⋯, narrow desktop folds play
+                       mode and the sleep timer. -->
+                  <q-item v-if="compact" clickable v-ripple @click="toggleQueueDialog()" v-close-popup>
+                    <q-item-section avatar><q-icon name="queue_music" /></q-item-section>
+                    <q-item-section>{{ t('audioplayer.switchTrack') }}</q-item-section>
+                  </q-item>
+                  <q-item v-if="compact" clickable v-ripple @click="openPanel()" v-close-popup>
+                    <q-item-section avatar><q-icon name="open_in_full" /></q-item-section>
+                    <q-item-section>{{ t('audioplayer.openPanel') }}</q-item-section>
+                  </q-item>
+                  <q-item v-if="compact" clickable v-ripple :disable="!hasLyric" @click="toggleLyrics()" v-close-popup>
+                    <q-item-section avatar><q-icon name="closed_caption" /></q-item-section>
+                    <q-item-section>
+                      {{ hasLyric ? t('playerbar.lyrics') : t('playerbar.noLyrics') }}
+                    </q-item-section>
+                    <q-item-section side v-if="showLyrics && hasLyric"><q-icon name="check" /></q-item-section>
+                  </q-item>
+                  <q-item v-if="narrow" clickable v-ripple @click="changePlayMode()" v-close-popup>
+                    <q-item-section avatar><q-icon :name="playModeIcon" /></q-item-section>
+                    <q-item-section>{{ playModeString }}</q-item-section>
+                  </q-item>
+                  <q-item v-if="narrow" clickable v-ripple @click="showSleepTimer = true" v-close-popup>
+                    <q-item-section avatar><q-icon name="snooze" /></q-item-section>
+                    <q-item-section>{{ sleepTimerTooltip }}</q-item-section>
+                  </q-item>
+                  <!-- The volume button only fits on wide bars, so below that
+                       the same control lives here instead of vanishing. -->
+                  <q-item v-if="volumeInMenu" dense>
+                    <q-item-section avatar>
+                      <q-btn flat round dense :icon="volumeIcon" @click="toggleMuted()" />
+                    </q-item-section>
+                    <q-item-section>
+                      <q-slider
+                        :model-value="volume"
+                        :min="0"
+                        :max="1"
+                        :step="0.01"
+                        color="primary"
+                        @update:model-value="setVolume"
+                      />
+                    </q-item-section>
+                  </q-item>
+                  <q-item
+                    v-if="compact"
+                    clickable
+                    v-ripple
+                    @click="toggleLyricsFullScreen"
+                    v-close-popup
+                  >
+                    <q-item-section avatar>
+                      <q-icon :name="lyricsFullScreen ? 'close_fullscreen' : 'open_in_full'" />
+                    </q-item-section>
+                    <q-item-section>
+                      {{ lyricsFullScreen ? t('lyricsfullscreen.close') : t('lyricsfullscreen.open') }}
+                    </q-item-section>
+                  </q-item>
+                </template>
+                <q-item clickable v-ripple @click="toggleFlipLRChannel()" v-close-popup>
+                  <q-item-section avatar><q-icon name="swap_horiz" /></q-item-section>
+                  <q-item-section>{{ t('audioplayer.flipLRChannel') }}</q-item-section>
+                  <q-item-section side v-if="flipLRChannel"><q-icon name="check" /></q-item-section>
+                </q-item>
+              </q-list>
+            </q-menu>
+          </q-btn>
+        </div>
+      </div>
     </div>
-  </q-card >
+
+    <SleepMode v-model="showSleepTimer" />
+  </div>
 </template>
 
 <script>
+import { useI18n } from 'vue-i18n'
 import { mapState, mapGetters, mapMutations } from 'vuex'
-import { formatSeconds } from '../utils'
+import SleepMode from 'components/SleepMode'
 import Scrollable from 'components/Scrollable'
-import { debounce } from 'quasar';
+import SeekUndoPill from 'components/SeekUndoPill'
+import { useSeekUndo } from 'src/utils/seek-undo'
+import { formatSeconds } from '../utils'
 import { apiUrl } from 'src/base-path'
-const OpState = {
-  idle: 0,
-  up: 1,
-  down: 2,
-  horize: 3,
-};
+
+const DRAG_THRESHOLD_PX = 8
+const SWIPE_UP_PX = 18
 
 export default {
   name: 'PlayerBar',
   components: {
+    SleepMode,
     Scrollable,
+    SeekUndoPill,
   },
+
+  props: {
+    // Width of the drawer the bar must clear, in px (MainLayout owns that state).
+    leftOffset: {
+      type: Number,
+      default: 0,
+    },
+    // Modal drawer open (< 500px): the bar belongs under its backdrop.
+    behindDrawer: {
+      type: Boolean,
+      default: false,
+    },
+  },
+
+  setup () {
+    const { t } = useI18n()
+    const { visible, percent } = useSeekUndo()
+    return { t, seekUndoVisible: visible, seekUndoPercent: percent }
+  },
+
+  data () {
+    return {
+      showSleepTimer: false,
+      seeking: false,
+      railHovered: false,
+      previewTime: 0,
+      drag: null,
+      railRect: null,
+    }
+  },
+
   computed: {
-    samCoverUrl () {
-      const id = this.currentPlayingFile.trackId
-      return id ? apiUrl(`/api/cover/${id.split('/')[0]}?type=sam`) : ""
-    },
-
-    showPlayBar () {
-      return this.currentPlayingFile.trackId && this.hide;
-    },
-
-    playingIcon () {
-      return this.playing ? "pause" : "play_arrow"
-    },
-
-    progressBarStyle() {
-      let percent = (this.currentTime / this.duration) * 100;
-      return {
-        width: `${percent.toFixed(5)}%`,
-      }
-    },
-
-    newCurrentTime() {
-      return this.deltaTime + this.startCurrentTime;
-    },
-
-    showDeltaTime() {
-      return `${this.deltaTime >= 0 ? '+': ''}${this.deltaTime.toFixed(1)}s`
-    },
-
-    showNewCurrentTime() {
-      return formatSeconds(this.newCurrentTime);
-    },
-     
-    showDeltaTimeStyle() {
-      // 当拖拽调整时间太小的时候，将deltaTime的显示位置向右侧偏移，避免显示区域过小看不到
-      const moveRightPercentThres = 0.4;
-      if (this.newCurrentTime / this.duration < moveRightPercentThres) {
-        return {
-          transform: 'translateX(100%)',
-          'text-align': 'left',
-        };
-      } else {
-        return {
-          'text-align': 'right',
-        }; // do nothing
-      }
-    },
-
-    // 拖动进度条时候的新进度条
-    newProgressBarStyle() {
-      const percent = Math.max(0, Math.min(100, (this.startCurrentTime + this.deltaTime) / this.duration * 100));
-      // const percent = 80;
-      return {
-        width: `${percent.toFixed(5)}%`,
-      };
-    },
-
-    isPanning() {
-      // return true;
-      return this.state == OpState.horize;
-    },
-
     ...mapState('AudioPlayer', [
       'hide',
       'playing',
       'currentTime',
       'duration',
-      'volume',
-      'swapSeekButton',
       'rewindSeekTime',
-      'forwardSeekTime'
+      'forwardSeekTime',
+      'playMode',
+      'sleepMode',
+      'sleepModeType',
+      'sleepStopAt',
+      'sleepTracksLeft',
+      'queue',
+      'queueIndex',
+      'playWorkId',
+      'playWorkVas',
+      'visualPlayerCoverUrl',
+      'showLyrics',
+      'hasLyric',
+      'lyricsFullScreen',
+      'flipLRChannel',
+      'muted',
+      'volume',
     ]),
 
     ...mapGetters('AudioPlayer', [
       'currentPlayingFile',
-      'currentPlayingTitle'
+      'currentPlayingTitle',
     ]),
 
+    visible () {
+      return Boolean(this.currentPlayingFile.trackId) && this.hide
+    },
+
+    coverUrl () {
+      // A user-picked cover is a media URL and is used as-is. The generated one is
+      // the full-size `main` cover, so ask for the small variant the bar draws.
+      const custom = this.visualPlayerCoverUrl
+      if (custom && !custom.includes('/api/cover/')) return custom
+      return this.playWorkId ? apiUrl(`/api/cover/${this.playWorkId}?type=sam`) : custom
+    },
+
+    queueLength () {
+      return this.queue.length
+    },
+
+    trackIndex () {
+      return this.queueLength ? `${this.queueIndex + 1} / ${this.queueLength}` : ''
+    },
+
+    workDuration () {
+      return this.queue.reduce((total, track) => total + (track.duration || 0), 0)
+    },
+
+    progressPercent () {
+      if (!this.duration) return 0
+      return (this.currentTime / this.duration) * 100
+    },
+
+    previewPercent () {
+      if (!this.duration) return 0
+      return (this.previewTime / this.duration) * 100
+    },
+
+    // Play mode and the sleep timer live in ⋯ once the bar is too narrow for
+    // the full cluster to sit clear of the centred transport.
+    narrow () {
+      return this.$q.screen.lt.md
+    },
+
+    // Phones have hardware volume keys; below 1024px the cluster would reach
+    // the transport, so the bar only carries the control on wide screens.
+    showVolume () {
+      return this.$q.platform.is.desktop && this.$q.screen.gt.sm
+    },
+
+    // Phones have hardware keys and no volume UI at all; a narrow desktop gets
+    // the control in the menu instead of nowhere.
+    volumeInMenu () {
+      return this.$q.platform.is.desktop && !this.showVolume
+    },
+
+    volumeIcon () {
+      if (this.muted || this.volume === 0) return 'volume_off'
+      return this.volume < 0.5 ? 'volume_down' : 'volume_up'
+    },
+
+    // Phones fold every secondary action into the overflow menu.
+    compact () {
+      return this.$q.screen.lt.sm
+    },
+
+    vaNames () {
+      return (this.playWorkVas || []).map(va => va.name).filter(Boolean).join('、')
+    },
 
     rewindIcon () {
       switch (this.rewindSeekTime) {
-        case 5:
-          return 'replay_5'
-        case 10:
-          return 'replay_10'
-        case 30:
-          return 'replay_30'
-        default:
-          return 'replay_5'
+        case 10: return 'replay_10'
+        case 30: return 'replay_30'
+        default: return 'replay_5'
       }
     },
 
     forwardIcon () {
       switch (this.forwardSeekTime) {
-        case 5:
-          return 'forward_5'
-        case 10:
-          return 'forward_10'
-        case 30:
-          return 'forward_30'
-        default:
-          return 'forward_5'
+        case 10: return 'forward_10'
+        case 30: return 'forward_30'
+        default: return 'forward_5'
       }
-    }
-  },
+    },
 
-  watch: {
-    volume() {
-      if (this.volumeDelayHideTimeoutId > 0) clearTimeout(this.volumeDelayHideTimeoutId);
-      this.showVolumeIndicator = true;
-      this.volumeDelayHideTimeoutId = setTimeout(() => {
-        this.showVolumeIndicator = false;
-      }, this.volumeDelayMills);
-    }
-  },
+    playModeIcon () {
+      switch (this.playMode.name) {
+        case 'all repeat': return 'repeat'
+        case 'repeat once': return 'repeat_one'
+        case 'shuffle': return 'shuffle'
+        default: return 'playlist_play'
+      }
+    },
 
-  data() {
-    return {
-      OpState,
-      state: OpState.idle, // state == OpState.horize 表示进入进度调整模式
-      vertTriggerPixels: 15, // 向上触发像素距离
-      horizeTriggerPixels: 10, // 左右触发像素距离
+    playModeString () {
+      switch (this.playMode.name) {
+        case 'all repeat': return this.t('audioplayer.playModeAllRepeat')
+        case 'repeat once': return this.t('audioplayer.playModeRepeatOnce')
+        case 'shuffle': return this.t('audioplayer.playModeShuffle')
+        default: return this.t('audioplayer.playModeOrder')
+      }
+    },
 
-      showVolumeIndicator: false,
-      volumeIndicatorWidth: 8, // 音量指示器宽度 pixel
-      volumeDelayMills: 1000, // 音量指示器显示时间
-      volumeDelayHideTimeoutId: 0, // timeout id
-
-      startClientX: 0,
-      startClientY: 0,
-      startCurrentTime: 0,
-      maxDeltaTime: 0,
-      minDeltaTime: 0,
-      deltaTime: 0,
-
-      fence: 0, // startPanning后fence自增1，防止不同startPanning相互之间重叠
-      holdTriggerMills: 500, // 按住500毫秒后也进入进度调整模式
-      onceMoved: false, // 是否移动过，和horizeTriggerPixels的区别在于，这里主要用于处理长按之后没有移动手指时候的情况，避免长按时进度条往后走，但是按住的位置没有变化，这个时候如果松开，则不要修正进度，否则进度可能回跳
-      movedTriggerPixels: 2, // 判断是否移动过的像素阈值
-      timeTriggerId: 0,
-    };
+    sleepTimerTooltip () {
+      if (!this.sleepMode) return this.t('audioplayer.sleepTimer')
+      if (this.sleepModeType === 'minutes' && this.sleepStopAt) {
+        const date = new Date(this.sleepStopAt)
+        return this.t('audioplayer.sleepTimerStopAt', {
+          hour: date.getHours(),
+          min: String(date.getMinutes()).padStart(2, '0'),
+        })
+      }
+      return this.t('audioplayer.sleepTimerTracksLeft', { count: this.sleepTracksLeft })
+    },
   },
 
   methods: {
@@ -239,239 +458,529 @@ export default {
       togglePlaying: 'TOGGLE_PLAYING',
       nextTrack: 'NEXT_TRACK',
       previousTrack: 'PREVIOUS_TRACK',
-      // changePlayMode: 'CHANGE_PLAY_MODE',
-      // setVolume: 'SET_VOLUME',
       rewind: 'SET_REWIND_SEEK_MODE',
       forward: 'SET_FORWARD_SEEK_MODE',
       setNewCurrentTime: 'SET_NEW_CURRENT_TIME',
+      armSeekUndo: 'ARM_SEEK_UNDO',
+      changePlayMode: 'CHANGE_PLAY_MODE',
+      toggleLyrics: 'TOGGLE_LYRICS',
+      toggleQueueDialog: 'TOGGLE_QUEUE_DIALOG',
+      setLyricsFullScreen: 'SET_LYRICS_FULL_SCREEN',
+      toggleMuted: 'TOGGLE_MUTED',
+      setFlipLRChannel: 'SET_FLIP_LR_CHANNEL',
+      setVolume: 'SET_VOLUME',
     }),
 
-    showAudioPlayer() {
-      if (this.hide) this.toggleHide()
+    formatSeconds,
+
+    toggleFlipLRChannel () {
+      this.setFlipLRChannel(!this.flipLRChannel)
     },
 
-    startPanning(x, y) {
-      this.startClientX = x;
-      this.startClientY = y;
-      this.startCurrentTime = this.currentTime;
-      this.maxDeltaTime = this.duration - this.startCurrentTime;
-      this.minDeltaTime = - this.startCurrentTime;
-      const sessionFence = ++this.fence;
-      this.deltaTime = 0;
+    toggleLyricsFullScreen () {
+      this.setLyricsFullScreen(!this.lyricsFullScreen)
+    },
 
-      this.timeTriggerId = setTimeout(() => {
-        if (sessionFence == this.fence && this.state == OpState.idle) {
-          console.warn("holdTrigger")
-          this.state = OpState.horize;
+    // The floating panel is the phone's player: above 600px the docked bar is
+    // the whole UI and there is deliberately no way to open it.
+    openPanel () {
+      if (!this.compact || !this.hide) return
+      this.toggleHide()
+    },
+
+    openWorkDetail () {
+      const trackId = this.currentPlayingFile.trackId
+      if (!trackId) return
+      const url = `/work/${trackId.split('/')[0]}`
+      if (this.$route.path !== url) this.$router.push(url)
+    },
+
+    onPointerDown (event) {
+      if (event.target.closest('.q-btn')) return
+      if (event.pointerType === 'mouse' && event.button !== 0) return
+      const rail = this.$refs.rail
+      if (!rail) return
+      this.railRect = rail.getBoundingClientRect()
+      // A press on the rail is a seek from the first frame -- a click there must
+      // scrub, not open the panel.
+      const onRail = Boolean(event.target.closest('.rail'))
+      this.drag = { x0: event.clientX, y0: event.clientY, mode: onRail ? 'seek' : null }
+      if (onRail) this.previewAt(event.clientX)
+    },
+
+    // Only the rail counts as a seek: the ±seconds buttons and the lyric rows
+    // are deliberate jumps, not browsing.
+    seekTo (seconds) {
+      if (Math.abs(seconds - this.currentTime) >= 1) {
+        this.armSeekUndo({ time: this.currentTime, at: Date.now() })
+      }
+      this.setNewCurrentTime(seconds)
+    },
+
+    previewAt (clientX) {
+      if (!this.railRect || !this.railRect.width || !this.duration) return
+      const ratio = (clientX - this.railRect.left) / this.railRect.width
+      this.previewTime = Math.min(this.duration, Math.max(0, ratio * this.duration))
+      this.seeking = true
+    },
+
+    onPointerMove (event) {
+      if (!this.drag) return
+      const dx = event.clientX - this.drag.x0
+      const dy = event.clientY - this.drag.y0
+
+      if (!this.drag.mode) {
+        if (Math.abs(dx) >= DRAG_THRESHOLD_PX) this.drag.mode = 'seek'
+        else if (dy <= -SWIPE_UP_PX && this.compact) {
+          this.drag.mode = 'swipe'
+          this.openPanel()
         }
-      }, this.holdTriggerMills)
-    },
-
-    panningMove(x, y) {
-      const deltaY = y - this.startClientY;
-      const deltaX = x - this.startClientX;
-      const absDeltaX = Math.abs(deltaX);
-
-      if (!this.onceMoved && absDeltaX >= this.movedTriggerPixels) {
-        this.onceMoved = true;
+        else return
       }
+      if (this.drag.mode !== 'seek') return
+      this.previewAt(event.clientX)
+    },
 
-      switch(this.state) {
-        case OpState.idle: {
-          // 注：y坐标越向下越大
-          if (deltaY <= -this.vertTriggerPixels) { // 优先判断
-            this.state = OpState.up;
-            this.showAudioPlayer();
-            break;
-          } else if (deltaY >= this.vertTriggerPixels) {
-            this.state = OpState.down; // do nothing
-          } else if (absDeltaX >= this.horizeTriggerPixels) {
-            this.state = OpState.horize;
-            this.onceMoved = true;
-
-            // // 更新start坐标，来弥补前面的这段空白位置区间
-            this.startClientX = x;
-            this.startClientY = y;
-
-            break;
-          }
-          break;
-        }
-
-        case OpState.up:
-        case OpState.down:
-          break;
-
-        case OpState.horize:
-          this.deltaTime = Math.max(this.minDeltaTime, Math.min(this.maxDeltaTime, deltaX / this.$refs.playBarBox.clientWidth * this.duration));
-          break;
+    onPointerUp () {
+      if (this.drag) {
+        if (this.drag.mode === 'seek' && this.seeking) this.seekTo(this.previewTime)
+        // Only on phones: on a wide screen the panel has nothing to add, so a
+        // tap on the bar is not a "open the big player" gesture.
+        else if (!this.drag.mode && this.compact) this.openPanel()
       }
+      this.drag = null
+      this.seeking = false
+      this.previewTime = 0
     },
-
-    panningEnd() {
-      if (this.state == OpState.idle) {
-        // 触摸结束时，如果并没有被识别成任何方向的扫描，则认为是点击操作，打开audioPlayer
-        this.showAudioPlayer();
-      } else if (this.state == OpState.horize && this.onceMoved) {
-        // this.onceMoved 用来处理长按后，进入horize调整状态，但是触摸位置并没有改变的情况，这个时候松开不应该调整进度，尤其是音频正在播放的时候
-        this.setNewCurrentTime(this.newCurrentTime);
-      }
-      // this.deltaTime = 0;
-      this.state = OpState.idle;
-      this.onceMoved = false;
-
-      clearTimeout(this.timeTriggerId);
-      this.timeTriggerId = 0;
-    },
-
-    mouseDown(event) {
-      if (event.which !== 1) { // only respond to left mouse click
-        return;
-      }
-      const {clientX: x, clientY: y} = event;
-      // console.log(`mouse donw: (x:${x}, y:${y})`);
-      this.startPanning(x, y);
-
-      document.addEventListener('mousemove', this.mouseMove)
-      document.addEventListener('mouseup', this.mouseUp)
-    },
-
-    mouseMove(event) {
-      const {clientX: x, clientY: y} = event;
-      // console.log(`mouse move: (x:${x}, y:${y})`);
-      this.panningMove(x, y);
-    },
-
-    mouseUp(event) {
-      this.panningEnd();
-      document.removeEventListener('mousemove', this.mouseMove)
-      document.removeEventListener('mouseup', this.mouseUp)
-    },
-
-    touchStart(event) {
-      if (event.changedTouches.length <= 0) return;
-      const {clientX: x, clientY: y} = event.changedTouches[0];
-      // console.log(`touch start: (x:${x}, y:${y})`);
-      this.startPanning(x, y);
-    },
-    touchEnd(event) {
-      // console.log('touch end')
-      this.panningEnd();
-    },
-    touchCancel(event) {
-      // console.log('touch cancel')
-      // this.deltaTime = 0;
-      this.state = OpState.idle;
-    },
-    touchMove(event) {
-      if (event.changedTouches.length <= 0) return;
-      const {clientX: x, clientY: y} = event.changedTouches[0];
-      // console.log(`touch move: (x:${x}, y:${y})`)
-      this.panningMove(x, y);
-    },
-  }
+  },
 }
 </script>
-<style lang="scss" scoped>
-.simple-progress {
-  position: absolute;
-  left: 0;
-  top: 0;
-  height: 100%;
-  /* width: 100%; */
-  opacity: 1;
-  transition: 0.5s;
-}
 
-.volumeIndicator {
-  position: absolute;
-  background: rgba($warning, $alpha: 0.8);
-  height: 100%;
+<style lang="scss" scoped>
+.docked-bar {
+  position: fixed;
+  left: 0;
   right: 0;
   bottom: 0;
-  border-radius: 3px 3px 0 0;
-  transition: 0.5s;
+  /* Above the AudioPlayer/LyricsBar wrapper (z-index 3001) so a transformed
+     panel can never sit invisibly over the transport and eat its clicks. */
+  z-index: 3100;
+  height: calc(128px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
+  background: rgb(var(--surface-container-lowest-rgb));
+  color: rgb(var(--on-surface-rgb));
+  transition: transform 0.3s ease;
+  touch-action: none;
 }
 
-.simple-progress {
-  // follows --q-primary in both light and dark schemes
-  background-color: rgb(var(--primary-rgb) / 0.4);
+.docked-bar--hidden {
+  transform: translateY(105%);
+  pointer-events: none;
 }
 
-.new-progress {
+.docked-bar--behind {
+  z-index: 1500;
+}
+
+/* 16px tall so the thin rail is still an easy grab target. */
+.rail {
+  --rail-height: 4px;
   position: absolute;
-  left: 0;
   top: 0;
-  height: 100%;
-  /* width: 100%; */
-  background-color: rgba($warning, $alpha: 0.5);
-  transition: opacity 0.5s;
+  left: 0;
+  right: 0;
+  height: 16px;
+  cursor: pointer;
+  touch-action: none;
 }
 
-.hideNewProgress {
-  opacity: 0.0;
+.rail:hover,
+.docked-bar--seeking .rail {
+  --rail-height: 8px;
 }
 
-.playBar {
-  bottom: 20px;
-  margin-left: 50%;
-  max-width: 500px;
-  transform: translateX(-50%) translateY(0);
-
-  border-radius: 8px;
-  /* background: white; */
-  box-shadow: black 0px 0px 8px;
+.rail-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--rail-height);
+  background: rgb(var(--outline-variant-rgb));
   overflow: hidden;
-  position: fixed;
-  transition: 0.5s;
-  color: inherit;
+  transition: height 0.12s ease;
 }
 
-// 左右拖拽playBar的时候，将控件顶部突出一些部分展示更多进度条，方便观察拖拽的进度
-.playBarBumpUp {
-
-  @media (min-width: $breakpoint-sm-min) {
-    padding: 4rem 10px 0 10px;
-    max-width: 520px !important;
-  }
-
-  // 宽度 < $breakpoint-xs-max (599px)
-  @media (max-width: $breakpoint-xs-max) {
-    padding: 4rem 2vw 0 2vw;
-    width: 84vw !important;
-  }
+.rail-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: rgb(var(--primary-rgb));
 }
 
-.hideStyle {
-  transform: translateX(-50%) translateY(200%);
-
-  // 不同尺寸下，AudioPlayer位于全屏、或者右下角，
-  // 参考其位置，调整底部playerBar隐藏时去往的地方，使动画更连贯
-  // 宽度 > $breakpoint-sm-min
-  @media (min-width: $breakpoint-sm-min) {
-    margin-left: 100%;
-  }
-  // 宽度 < $breakpoint-xs-max (599px)
-  @media (max-width: $breakpoint-xs-max) {
-    width: 80vw;
-  }
+.rail-preview {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: rgb(var(--primary-rgb) / 0.45);
 }
 
-.showStyle {
-  transform: translateX(-50%) translateY(0);
-  width: 80vw;
+/* Ghost handle: where the undo pill would take you. Hollow, so it never reads
+   as the live position. */
+.rail-undo {
+  position: absolute;
+  top: calc(var(--rail-height) / 2);
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgb(var(--primary-rgb));
+  border-radius: 50%;
+  background: rgb(var(--surface-rgb));
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
+/* Ringed so the handle still reads where it sits on top of the filled part. */
+.rail-thumb {
+  position: absolute;
+  top: calc(var(--rail-height) / 2);
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgb(var(--surface-container-lowest-rgb));
+  border-radius: 50%;
+  background: rgb(var(--primary-rgb));
+  transform: translate(-50%, -50%);
+}
 
-.audio-name {
-  font-weight: bold;
+.rail-bubble {
+  position: absolute;
+  top: -26px;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgb(var(--inverse-surface-rgb));
+  color: rgb(var(--inverse-on-surface-rgb));
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 100%;
+  padding: 0 16px;
+}
+
+/* Bar is 128px tall: 96px leaves 16px of air top and bottom. */
+.cover {
+  flex: none;
+  width: 96px;
+  height: 96px;
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.cover-img {
+  width: 100%;
+  height: 100%;
+}
+
+/* Not a containing block on purpose: the transport and the actions below are
+   positioned against the bar itself, so the transport is centred on the bar
+   rather than on the space left over by the cover. */
+.main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding-top: 14px;
+  box-sizing: border-box;
+}
+
+.texts {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* The marquee owns the width and the clipping; the span only carries type. */
+.title-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
-.work-name {
-  opacity: 0.7;
+.meta {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  gap: 12px;
+  font-size: 11.5px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
+.meta-index {
+  color: rgb(var(--outline-rgb));
+}
 
+.meta-total {
+  color: rgb(var(--on-surface-variant-rgb));
+}
+
+.track-scroll {
+  display: block;
+  width: 100%;
+}
+
+.track {
+  font-size: 13px;
+  color: rgb(var(--on-surface-variant-rgb));
+  white-space: nowrap;
+}
+
+.vas {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 14px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgb(var(--outline-rgb));
+}
+
+.va-icon {
+  font-size: 12px;
+}
+
+.vas span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Centred on the bar itself, not on the space left of the actions. */
+.transport {
+  position: absolute;
+  left: 50%;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time {
+  min-width: 38px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgb(var(--on-surface-variant-rgb));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.time--total {
+  text-align: left;
+  color: rgb(var(--outline-rgb));
+}
+
+.seek,
+.skip {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  flex: none;
+}
+
+.seek {
+  color: rgb(var(--on-surface-variant-rgb));
+}
+
+.skip {
+  color: rgb(var(--on-surface-rgb));
+}
+
+/* The visual circle must be the whole hit area: pinned size, no overflow from
+   the oversized glyph, and above its neighbours in the stack. */
+.play {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  min-height: 52px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.play :deep(.q-icon) {
+  font-size: 24px;
+}
+
+/* Above the bar, clear of the rail thumb, flush with the action cluster. */
+.bar-seek-undo {
+  position: absolute;
+  right: 16px;
+  bottom: 100%;
+  margin-bottom: 16px;
+  z-index: 1;
+}
+
+.volume-menu {
+  width: 176px;
+  padding: 4px 12px 4px 4px;
+}
+
+.actions {
+  position: absolute;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.action {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  color: rgb(var(--on-surface-variant-rgb));
+}
+
+.action--on {
+  color: rgb(var(--primary-rgb));
+}
+
+/* Quasar marks a disabled button with a bare `disabled` class at 0.7 !important;
+   0.7 reads as "hovered" rather than "unavailable", so this has to win the same way. */
+.action.q-btn--disabled,
+.action.disabled {
+  opacity: 0.38 !important;
+  color: rgb(var(--outline-rgb));
+}
+
+// The numeric times are the widest part of the transport, then the seek
+// buttons: dropping each in turn keeps the centred transport clear of the
+// action cluster all the way down to the 600px bar breakpoint.
+@media (max-width: 899px) {
+  .time {
+    display: none;
+  }
+}
+
+@media (max-width: 799px) {
+  .seek {
+    display: none;
+  }
+}
+
+@media (max-width: 599px) {
+  .docked-bar {
+    height: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  .body {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .cover {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+  }
+
+  .main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 0;
+  }
+
+  .texts {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .bar-seek-undo {
+    right: 12px;
+    margin-bottom: 12px;
+  }
+
+  .transport,
+  .actions {
+    position: static;
+    transform: none;
+    margin-left: auto;
+  }
+
+  .title {
+    font-size: 13px;
+  }
+
+  .track {
+    font-size: 11px;
+  }
+
+  .meta,
+  .vas,
+  .time,
+  .seek {
+    display: none;
+  }
+
+  .transport {
+    gap: 4px;
+  }
+
+  .skip {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .play {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .play :deep(.q-icon) {
+    font-size: 26px;
+  }
+
+  .actions {
+    gap: 0;
+    margin-left: 0;
+  }
+
+  .action:not(.action--more) {
+    display: none;
+  }
+}
 </style>

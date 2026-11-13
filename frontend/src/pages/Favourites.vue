@@ -8,7 +8,10 @@
             spread
             no-caps
             rounded
-            toggle-color="primary"
+            toggle-color="primary-container"
+            toggle-text-color="on-primary-container"
+            color="surface-container-lowest"
+            text-color="on-surface"
             class="text-bold outline-style"
             :options="modeOptions"
           />
@@ -34,7 +37,10 @@
         <q-btn-toggle
           v-model="hideFinishedFilter"
           @update:model-value="onHideFinishedChange"
-          toggle-color="primary"
+          toggle-color="primary-container"
+          toggle-text-color="on-primary-container"
+          color="surface-container-lowest"
+          text-color="on-surface"
           rounded
           class="outline-style"
           :options="hideFinishedOptions"
@@ -50,7 +56,10 @@
       <q-btn-toggle
         v-model="progressFilter"
         @update:model-value="changeProgressFilter"
-        toggle-color="primary"
+        toggle-color="primary-container"
+        toggle-text-color="on-primary-container"
+        color="surface-container-lowest"
+        text-color="on-surface"
         rounded
         class="outline-style"
         :options="progressOptions"
@@ -62,7 +71,7 @@
       <div class="q-px-sm q-pt-md">
         <q-infinite-scroll @load="onLoad" :offset="500" :disable="stopLoad" ref="scroll">
           <div class="row justify-center text-muted" v-if="works.length === 0">{{ t('favourites.emptyHint') }}</div>
-          <q-list bordered separator class="shadow-2" v-if="works.length">
+          <q-list bordered separator v-if="works.length">
              <FavListItem v-for="work in works" :key="work.id" :workid="work.id" :metadata="work" @reset="reset()" :mode="mode"></FavListItem> 
           </q-list>
           <template v-slot:loading>

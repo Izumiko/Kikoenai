@@ -6,7 +6,7 @@
     <div class="q-mt-lg q-ml-md row items-center">
       <span class="text-h5 text-weight-regular q-pa-xs relative-position">
         {{pageTitle}}
-        <q-badge color="secondary" floating>{{pagination.totalCount}}</q-badge>
+        <q-badge color="secondary" text-color="on-secondary" floating>{{pagination.totalCount}}</q-badge>
       </span>
       <div> <!--普通搜索模式的信息展示-->
         <!-- A filter is a list of terms, so it is shown as one removable chip
@@ -60,9 +60,10 @@
         spread
         rounded
         v-model="listMode"
-        toggle-color="primary"
-        color="white"
-        text-color="primary"
+        toggle-color="primary-container"
+        toggle-text-color="on-primary-container"
+        color="surface-container-lowest"
+        text-color="on-surface"
         :options="[
           { icon: 'apps', value: false },
           { icon: 'list', value: true }
@@ -76,9 +77,10 @@
         spread
         rounded
         v-model="showLabel"
-        toggle-color="primary"
-        color="white"
-        text-color="primary"
+        toggle-color="primary-container"
+        toggle-text-color="on-primary-container"
+        color="surface-container-lowest"
+        text-color="on-surface"
         :options="[
           { icon: 'label', value: true },
           { icon: 'label_off', value: false }
@@ -94,9 +96,10 @@
         rounded
         :disable="$q.screen.width < 1120"
         v-model="detailMode"
-        toggle-color="primary"
-        color="white"
-        text-color="primary"
+        toggle-color="primary-container"
+        toggle-text-color="on-primary-container"
+        color="surface-container-lowest"
+        text-color="on-surface"
         :options="[
           { icon: 'zoom_in', value: true },
           { icon: 'zoom_out', value: false },
@@ -111,11 +114,12 @@
     <div :class="`row justify-center ${listMode ? 'list' : 'q-mx-md'}`">
       <q-infinite-scroll @load="onLoad" :offset="500" :disable="stopLoad" class="col">
 
-        <q-list v-if="listMode" bordered separator class="shadow-2">
+        <q-list v-if="listMode" class="bg-surface-container-low separator">
           <WorkListItem v-for="work in works" :key="work.id" :metadata="work" :showLabel="showLabel && $q.screen.width > 700" />
         </q-list>
 
         <!--解决android平台hover事件不像safari那样及时响应的问题，需要手动添加触摸响应时间-->
+        <!--TODO: verify this-->
         <div v-else-if="$q.platform.is.android && $q.platform.has.touch" class="row q-col-gutter-x-md q-col-gutter-y-lg">
           <div class="col-xs-12 col-sm-6 col-md-4" v-for="work in works" :key="work.id"
             @touchstart="()=>onWorkCardTouch(work.id)"
@@ -132,7 +136,7 @@
             :class="detailMode ? 'col-lg-3 col-xl-2': 'col-lg-2 col-xl-2'"
             style="--sim-hover-work-card: 0"
           >
-            <WorkCard :metadata="work" :thumbnailMode="!detailMode" :oldStyle="oldWorkCardUIStyle" class="fit"/>
+            <WorkCard :metadata="work" :thumbnailMode="!detailMode" :oldStyle="oldWorkCardUIStyle" class="fit bg-surface-container-low"/>
           </div>
         </div>
 
@@ -180,8 +184,6 @@ export default {
       detailMode: true,
       stopLoad: false,
       works: [],
-      pageTitle: '',
-      searchMetas: [],
       page: 1,
       pagination: { currentPage:0, pageSize:12, totalCount:0 },
       seed: 7, // random sort
@@ -205,7 +207,6 @@ export default {
     }
   },
   created () {
-    this.refreshPageTitle();
     this.seed = Math.floor(Math.random() * 100);
     this._lastFilter = this.filter
   },
@@ -236,6 +237,14 @@ export default {
   computed: {
     filter () {
       return this.$route.query.filter || ''
+    },
+
+    pageTitle () {
+      return this.filter ? this.t('works.searchKeyword') : this.t('works.allWorks')
+    },
+
+    searchMetas () {
+      return this.filter ? [this.filter] : []
     },
 
     url () {
@@ -348,20 +357,9 @@ export default {
         })
     },
 
-    refreshPageTitle () {
-      if (this.filter) {
-        this.pageTitle = this.t('works.searchKeyword');
-        this.searchMetas = [this.filter];
-      } else {
-        this.pageTitle = this.t('works.allWorks')
-        this.searchMetas = [];
-      }
-    },
-
     reset () {
       this.seed = Math.floor(Math.random() * 100);
       this.stopLoad = true
-      this.refreshPageTitle()
       this.pagination = { currentPage:0, pageSize:12, totalCount:0 }
       this._lastFilter = this.filter
       window.scrollTo(0, 0)

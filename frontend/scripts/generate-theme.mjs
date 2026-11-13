@@ -132,6 +132,35 @@ const tokenRoles = [
   ['inverse-on-surface', 'inverseOnSurface']
 ];
 
+// Roles every current export carries but older ones may not; skipped when the
+// scheme has no such key. `surface-container-lowest` is the "raised on a dimmer
+// page" tone (grouped-list idiom), and surfaceDim/surfaceBright give the scale
+// its floor and ceiling.
+const optionalTokenRoles = [
+  ['surface-dim', 'surfaceDim'],
+  ['surface-bright', 'surfaceBright'],
+  ['surface-container-lowest', 'surfaceContainerLowest'],
+  ['surface-container-low', 'surfaceContainerLow'],
+  ['surface-tint', 'surfaceTint'],
+  ['scrim', 'scrim'],
+  ['shadow', 'shadow']
+];
+
+// Shape (corner radius) scale. Fixed by the Material 3 spec rather than derived
+// from the seed, so it is emitted once for the whole app instead of per scheme.
+const SHAPE_SCALE = [
+  ['none', '0px'],
+  ['extra-small', '4px'],
+  ['small', '8px'],
+  ['medium', '12px'],
+  ['large', '16px'],
+  ['large-increased', '20px'],
+  ['extra-large', '28px'],
+  ['extra-large-increased', '32px'],
+  ['extra-extra-large', '48px'],
+  ['full', '9999px']
+];
+
 const hexToRgb = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
@@ -158,8 +187,12 @@ $info      : ${semantic('info')};
 $warning   : ${semantic('warning')};
 `;
 
-// --- material-theme.scss: extended tokens + dark-mode brand overrides ---
-const vars = (scheme, brand) => {
+// --- material-theme.scss: extended tokens + per-scheme brand overrides ---
+// `brandVariant` is the key into `extended[<colour>][<variant>]` whose tone the
+// Quasar brand variables (`--q-positive`/`--q-info`/`--q-warning`) should take,
+// or null to leave them to the `$positive`/`$info`/`$warning` values Quasar
+// already has from quasar.variables.scss (the light base scheme).
+const vars = (scheme, brandVariant) => {
   const lines = [];
   // RGB triplets of brand colors, for alpha variants: rgb(var(--primary-rgb) / 0.5)
   lines.push(
@@ -169,23 +202,30 @@ const vars = (scheme, brand) => {
     `  --negative-rgb: ${hexToRgb(scheme.error)};`,
     ''
   );
-  if (brand) {
+  if (brandVariant) {
     lines.push(
       '  // brand colors (Quasar components read these CSS vars)',
       `  --q-primary: ${scheme.primary};`,
       `  --q-secondary: ${scheme.secondary};`,
       `  --q-accent: ${scheme.tertiary};`,
       `  --q-negative: ${scheme.error};`,
-      // dark variants of the extended (semantic) colors
+      // Semantic brand colors take the tone of *this* variant, so they stay
+      // paired with the `--on-*` token emitted for the same variant. Taking the
+      // dark tone for a light contrast tier pairs it with a white on-color and
+      // measured 1.7:1.
       ...['positive', 'info', 'warning']
         .filter((n) => extended[n])
-        .map((n) => `  --q-${n}: ${extended[n].dark.color};`),
+        .map((n) => `  --q-${n}: ${extended[n][brandVariant].color};`),
       ''
     );
   }
   for (const [name, role] of tokenRoles) {
     if (!scheme[role]) throw new Error(`Missing role "${role}" in scheme`);
     // The *-rgb triplet allows alpha variants: rgb(var(--surface-rgb) / 0.5)
+    lines.push(`  --${name}: ${scheme[role]};`, `  --${name}-rgb: ${hexToRgb(scheme[role])};`);
+  }
+  for (const [name, role] of optionalTokenRoles) {
+    if (!scheme[role]) continue;
     lines.push(`  --${name}: ${scheme[role]};`, `  --${name}-rgb: ${hexToRgb(scheme[role])};`);
   }
   return lines.join('\n');
@@ -201,10 +241,10 @@ if (lightHigh || darkHigh) {
 // High contrast, applied automatically when the user prefers more contrast.
 @media (prefers-contrast: more) {
 ${lightHigh ? `  :root {
-${vars(lightHigh, true)}${extendedBlock('lightHigh', '  ')}
+${vars(lightHigh, 'lightHigh')}${extendedBlock('lightHigh', '  ')}
   }
 ` : ''}${darkHigh ? `  body.body--dark {
-${vars(darkHigh, true)}${extendedBlock('darkHigh', '  ')}
+${vars(darkHigh, 'darkHigh')}${extendedBlock('darkHigh', '  ')}
   }
 ` : ''}}
 `;
@@ -221,10 +261,10 @@ for (const [cls, lt, dk, ltVariant, dkVariant] of [
   contrastBlocks += `
 // Manual ${cls} override.
 ${lt ? `body.${cls} {
-${vars(lt, true)}${extendedBlock(ltVariant)}
+${vars(lt, ltVariant)}${extendedBlock(ltVariant)}
 }
 ` : ''}${dk ? `body.body--dark.${cls} {
-${vars(dk, true)}${extendedBlock(dkVariant)}
+${vars(dk, dkVariant)}${extendedBlock(dkVariant)}
 }
 ` : ''}`;
 }
@@ -241,6 +281,17 @@ ${vars(dk, true)}${extendedBlock(dkVariant)}
 // Bare `text-on-<role>` for the M3 on-colors (also not all provided by
 // Quasar) and surface/on-surface helpers are included for the same reason.
 const containerRoles = ['primary', 'secondary', 'tertiary', 'error'];
+// Every surface role this export emits, derived from the two lists above so a
+// new role only has to be added in one place. Emitted as `.bg-<role>`.
+const emittedRoleNames = [
+  ...tokenRoles.map(([name]) => name),
+  ...optionalTokenRoles
+    .filter(([, role]) => light[role] || dark[role])
+    .map(([name]) => name)
+];
+const surfaceRoles = emittedRoleNames.filter(
+  (name) => name === 'surface' || name === 'inverse-surface' || /^surface-(dim|bright|container)/.test(name)
+);
 // Extended (semantic) colors are emitted only when present in extendedColors.
 const extendedContainerRoles = ['positive', 'info', 'warning'];
 const bareOnRoles = ['primary', 'secondary', 'tertiary', 'error', 'positive', 'info', 'warning'];
@@ -266,10 +317,10 @@ ${extendedContainerRoles
   )
   .join('\n')}
 
-// Surface container helpers
-.bg-surface-container { background: var(--surface-container) !important; }
-.bg-surface-container-highest { background: var(--surface-container-highest) !important; }
-.bg-inverse-surface { background: var(--inverse-surface) !important; }
+// Surface backgrounds, one per surface role the theme emits
+${surfaceRoles
+  .map((r) => `.bg-${r} { background: var(--${r}) !important; }`)
+  .join('\n')}
 
 // Bare on-color text helpers (on-<role>); Quasar provides some, but not all M3 roles
 ${bareOnRoles
@@ -280,14 +331,21 @@ ${bareOnRoles
 .text-on-surface-variant { color: var(--on-surface-variant) !important; }
 `;
 
+const shapeVars = SHAPE_SCALE.map(([name, value]) => `  --md-sys-shape-corner-${name}: ${value};`).join('\n');
+
 const tokens = `${header}
+// Material 3 shape scale (spec-fixed)
+:root {
+${shapeVars}
+}
+
 // Material roles Quasar doesn't have. Use as var(--primary-container) etc.
 :root {
-${vars(light, false)}${extendedBlock('light')}
+${vars(light, null)}${extendedBlock('light')}
 }
 
 body.body--dark {
-${vars(dark, true)}${extendedBlock('dark')}
+${vars(dark, 'dark')}${extendedBlock('dark')}
 }
 ${contrastBlocks}`;
 

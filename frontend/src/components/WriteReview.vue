@@ -23,9 +23,10 @@
               rounded
               unelevated
               :padding="$q.screen.width < 400 ? 'sm': ''"
-              toggle-color="primary"
-              color="white"
-              text-color="primary"
+              toggle-color="primary-container"
+              toggle-text-color="on-primary-container"
+              color="surface-container-lowest"
+              text-color="on-surface"
               :options="progressOptions"
             />
           </q-card-section>
@@ -191,5 +192,5 @@ export default {
 
 <style lang="sass" scoped>
 .my-custom-toggle
-  border: 1px solid $primary
+  border: 1px solid rgb(var(--outline-rgb))
 </style>

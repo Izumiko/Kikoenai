@@ -1,22 +1,22 @@
 <template>
   <q-layout view="hHh Lpr lFf" class="">
-    <q-header reveal :reveal-offset="100" @reveal="onHeaderRevealChange" class="shadow-4">
+    <q-header reveal :reveal-offset="100" @reveal="onHeaderRevealChange" class="shadow-4 bg-primary text-on-primary">
       <q-toolbar class="row justify-between">
         <q-btn flat dense round @click="drawerOpen = !drawerOpen" icon="menu" aria-label="Menu" />
 
         <q-btn flat size="md" icon="arrow_back_ios" @click="back()" v-if="isNotAtHomePage"/>
 
         <q-toolbar-title class="gt-xs">
-          <router-link :to="'/'" class="text-white">
+          <router-link :to="'/'" class="text-on-primary">
             Kikoeru
           </router-link>
         </q-toolbar-title>
 
-        <q-input dark dense rounded standout v-model="filter" debounce="500" input-class="text-right" class="q-mr-sm"
+        <q-input dense rounded standout bg-color="surface-container" v-model="filter" debounce="500" input-class="text-right text-on-surface" class="q-mr-sm"
           @keyup.enter="search($event.target.value); $event.target.blur()">
           <template v-slot:append>
-            <q-icon v-if="filter === ''" name="search" />
-            <q-icon v-else name="clear" class="cursor-pointer" @click="filter = ''" />
+            <q-icon v-if="filter === ''" name="search" class="text-on-surface-variant" />
+            <q-icon v-else name="clear" class="cursor-pointer text-on-surface" @click="filter = ''" />
           </template>
         </q-input>
 
@@ -24,14 +24,16 @@
     </q-header>
 
     <q-drawer
+      class="bg-surface-container"
       v-model="drawerOpen"
-      show-if-above
+      :show-if-above="!lyricsFullScreen"
       :mini="miniState"
       @mouseenter="miniState = false"
       @mouseleave="miniState = true"
       mini-to-overlay
       no-mini-animation
       :width="220"
+      :mini-width="56"
       :breakpoint="500"
       bordered
       content-class=""
@@ -73,24 +75,6 @@
             <q-item-section>
               <q-item-label class="text-subtitle1">
                 {{ t('mainlayout.randomPlay') }}
-              </q-item-label>
-            </q-item-section>
-          </q-item>
-
-          <q-item
-            clickable
-            v-ripple
-            exact
-            active-class="text-primary text-weight-medium"
-            @click="toggleDarkMode"
-          >
-            <q-item-section avatar>
-              <q-icon name="dark_mode" />
-            </q-item-section>
-
-            <q-item-section>
-              <q-item-label class="text-subtitle1">
-                {{ t('mainlayout.darkMode') }}
               </q-item-label>
             </q-item-section>
           </q-item>
@@ -145,7 +129,7 @@
     <q-dialog v-model="confirm" persistent>
       <q-card>
         <q-card-section class="row items-center">
-          <q-avatar icon="power_settings_new" color="primary" text-color="white" />
+          <q-avatar icon="power_settings_new" color="primary" text-color="on-primary" />
           <span class="q-ml-sm">{{ t('mainlayout.logoutConfirm') }}</span>
         </q-card-section>
 
@@ -156,7 +140,7 @@
       </q-card>
     </q-dialog>
 
-    <q-page-container :class="{'page-container-style': isFullScreenPage, 'padding-bottom-play-bar': !isFullScreenPage}">
+    <q-page-container class="padding-bottom-play-bar">
       <!-- <q-page padding> -->
       <router-view v-slot="{ Component }">
         <keep-alive :include="['Works', 'Favourites']">
@@ -164,13 +148,16 @@
         </keep-alive>
       </router-view>
       <!-- </q-page> -->
-      <q-page-scroller v-if="!isFullScreenPage" position="bottom-right" :scroll-offset="150" :offset="[18, 90]" class="scroller" :class="{'scroller-hide': !showScroller, 'scroller-show': showScroller}">
-        <q-btn dense fab icon="keyboard_arrow_up" color="accent" padding="sm" />
+      <q-page-scroller position="bottom-right" :scroll-offset="150" :offset="[18, 90]" class="scroller" :class="{'scroller-hide': !showScroller, 'scroller-show': showScroller}">
+        <q-btn dense fab icon="keyboard_arrow_up" color="accent" text-color="on-tertiary" padding="sm" />
       </q-page-scroller>
     </q-page-container>
 
+    <LyricsFullScreen />
+
+    <PlayerBar :left-offset="barInset" :behind-drawer="drawerCoversBar" />
+
     <div :style="{'z-index': miniState ? 3001 : 0}" style="position: fixed; bottom: 0;"> <!-- z-index must be greater than header z-index -->
-      <PlayerBar />
       <AudioPlayer />
       <LyricsBar />
     </div>
@@ -182,9 +169,9 @@ import { useI18n } from 'vue-i18n'
 import PlayerBar from 'components/PlayerBar'
 import AudioPlayer from 'components/AudioPlayer'
 import LyricsBar from 'components/LyricsBar'
+import LyricsFullScreen from 'components/LyricsFullScreen'
 import NotifyMixin from '../mixins/Notification.js'
 import { mapMutations, mapState } from 'vuex'
-import { Dark } from 'quasar'
 import { CONTRAST_MODES, getContrastMode, setContrastMode } from 'src/utils/contrast'
 import { onDownloadMessage, reconcileDownloads } from 'src/utils/downloads'
 import { requestSync } from 'src/utils/outbox'
@@ -202,13 +189,16 @@ export default {
     PlayerBar,
     AudioPlayer,
     LyricsBar,
+    LyricsFullScreen,
 },
 
   data () {
     return {
       filter: '',
       drawerOpen: false,
+      drawerWasOpen: false,
       miniState: true,
+
       confirm: false,
       randId: null,
       version: '',
@@ -218,13 +208,13 @@ export default {
       contrastMode: getContrastMode(),
       links: [
         { titleKey: 'mediaLibrary', icon: 'widgets', path: '/' },
-        { titleKey: 'fullScreenMode', icon: 'play_circle', path: '/fullScreenPlayer' },
         { titleKey: 'favourites', icon: 'favorite', path: '/favourites' },
         { titleKey: 'downloads', icon: 'download_done', path: '/downloads' },
         { titleKey: 'circles', icon: 'group', path: '/circles' },
         { titleKey: 'tags', icon: 'label', path: '/tags' },
         { titleKey: 'voiceActors', icon: 'mic', path: '/vas' },
-        { titleKey: 'settings', icon: 'tune', path: '/admin' },
+        { titleKey: 'settings', icon: 'tune', path: '/settings' },
+        { titleKey: 'admin', icon: 'admin_panel_settings', path: '/admin', adminOnly: true },
       ],
     }
   },
@@ -232,6 +222,18 @@ export default {
   watch: {
     filter () {
       this.search(this.filter)
+    },
+
+    // The lyric view is inset against the bar, so the drawer has to go: an
+    // inset bar leaves a strip of drawer visible beside it.
+    lyricsFullScreen (open) {
+      if (open) {
+        this.drawerWasOpen = this.drawerOpen
+        this.drawerOpen = false
+      } else if (this.drawerWasOpen) {
+        this.drawerWasOpen = false
+        this.drawerOpen = true
+      }
     },
 
     randId () {
@@ -245,13 +247,31 @@ export default {
     this.fetchSharedConfig();
     requestSync();
     this.initOfflineDownloads();
+
+    // The bar/panel default follows the viewport, so crossing the breakpoint
+    // switches mode instead of leaving a phone layout on a wide window.
+    this.playerModeQuery = window.matchMedia('(min-width: 600px)')
+    this.playerModeQuery.addEventListener('change', this.onPlayerModeChange)
   },
 
   beforeUnmount () {
     if (this.unsubscribeDownloadMessages) this.unsubscribeDownloadMessages();
+    if (this.playerModeQuery) {
+      this.playerModeQuery.removeEventListener('change', this.onPlayerModeChange)
+    }
   },
 
   computed: {
+    // The drawer's mini width (set in the template). Fixed whether it is mini or
+    // expanded, so nothing in the bar moves on hover.
+    barInset () {
+      return this.drawerOpen && this.$q.screen.width > 500 ? 56 : 0
+    },
+
+    drawerCoversBar () {
+      return this.drawerOpen && (!this.miniState || this.$q.screen.width <= 500)
+    },
+
     contrastModeLabel () {
       const labels = {
         '': this.t('mainlayout.systemDefault'),
@@ -266,25 +286,33 @@ export default {
       return path && path !=='/' && path !=='/works' && path !== '/favourites';
     },
 
-    isFullScreenPage() {
-      const path = this.$route.path
-      return path && path.startsWith('/fullScreenPlayer');
-    },
+    ...mapState('AudioPlayer', [
+      'lyricsFullScreen',
+    ]),
 
     ...mapState('User', {
       userName: 'name',
-      authEnabled: 'auth'
+      authEnabled: 'auth',
+      userGroup: 'group',
     }),
+
+    isAdmin () {
+      return !this.authEnabled || this.userGroup === 'administrator' || this.userName === 'admin'
+    },
     
-    ...mapState('AudioPlayer', [
-      'playWorkId',
-    ]),
   },
 
   methods: {
     ...mapMutations('AudioPlayer', [
       'SET_AI_SERVER_URL',
+      'SET_HIDE',
     ]),
+
+    onPlayerModeChange (event) {
+      this.SET_HIDE(event.matches)
+    },
+
+
     // Called by the filter watcher and by Enter (which bypasses the input's debounce)
     search (filter) {
       this.filter = filter
@@ -417,11 +445,6 @@ export default {
       this.$router.go(-1)
     },
 
-    toggleDarkMode() {
-      console.log("toggleDarkMode called")
-      Dark.toggle();
-    },
-
     cycleContrastMode() {
       const next = CONTRAST_MODES[(CONTRAST_MODES.indexOf(this.contrastMode) + 1) % CONTRAST_MODES.length]
       setContrastMode(next)
@@ -430,16 +453,10 @@ export default {
 
     getLinks() {
       return this.links.filter(link => {
-        if (link.path === '/fullScreenPlayer' && this.playWorkId == 0)
+        if (link.adminOnly && !this.isAdmin)
           return false;
         return true;
-      }).map(link => {
-        const copy = { ...link, title: this.t('mainlayout.' + link.titleKey) }
-        if (link.path === '/fullScreenPlayer') {
-          copy.path += `/${this.playWorkId}`
-        }
-        return copy
-      })
+      }).map(link => ({ ...link, title: this.t('mainlayout.' + link.titleKey) }))
     },
     
     onHeaderRevealChange(isReveal) {
@@ -483,19 +500,13 @@ aside.q-drawer:not(.q-drawer--mini) .q-scrollarea {
     word-break: break-word;
 }
 
-// 中心主要页面的尺寸样式
-.page-container-style {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: 0;
-  /* overflow-y: auto; */
-}
-
 // 为了避开底部的play bar设置的padding
 .padding-bottom-play-bar {
-  padding-bottom: 80px !important 
+  padding-bottom: calc(128px + env(safe-area-inset-bottom)) !important;
+
+  @media (max-width: $breakpoint-xs-max) {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom)) !important;
+  }
 }
 
 .scroller {

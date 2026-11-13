@@ -2,7 +2,7 @@
  * One entry of a work's file listing.
  *
  * Both producers of a listing -- `getTrackList` (a filesystem walk) and
- * `listWorkTracks`/`shapeRows` (the `t_work_file` rows) -- shape their entries
+ * `listWorkTracks`/`rowsToTracks` (the `t_work_file` rows) -- shape their entries
  * this way, and the route helpers that resolve a media request consume them.
  */
 
